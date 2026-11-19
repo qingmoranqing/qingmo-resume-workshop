@@ -61,8 +61,7 @@
 
 ```bash
 npm install
-# 或使用 bun
-bun install
+# 或使用 bun：bun install
 ```
 
 ### 2. 配置环境变量（可选）
