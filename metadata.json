@@ -1,0 +1,8 @@
+{
+  "name": "简历工坊 · 智能多岗简历编辑器",
+  "description": "左侧工作台、右侧实时 A4 预览的多模板简历工坊，支持四套统一排版模板、AI 智能换岗与 JD 定制、可编辑投递助手包及内置可调 Prompt 的双引擎简历体检。",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
