@@ -108,7 +108,22 @@ npm run build
 npm start
 ```
 
-### 5. 类型检查与单元测试
+### 5. 打包免安装单文件一体包（Windows `.exe`）
+
+支持将前后端全部资源内嵌编译为**单个独立可执行文件**（无需安装 Node.js、无需额外 `dist/` 目录，双击自动启动本地服务并弹出默认浏览器，端口冲突自动避让）：
+
+```bash
+# 本地打包 Windows x64 单文件 .exe（需安装 Bun）
+bun run build:exe
+# 生成产物：release/ResumeCraft-win-x64.exe
+```
+
+- **直接使用**：双击 `ResumeCraft-win-x64.exe` 即可打开编辑；如需预设服务端 AI 接口，可在 `.exe` 同级目录放一份 `.env` 文件，或直接在右上角「设置」中填写。
+- **GitHub 自动发版（推荐）**：仓库已内置 `.github/workflows/build-exe.yml`：
+  - 在 GitHub 仓库的 **Actions → Build Standalone Executable (.exe) → Run workflow** 点击运行，约 1 分钟即可直接下载构建好的 `.exe`；
+  - 或本地推送版本号标签（如 `git tag v1.0.0 && git push origin v1.0.0`），GitHub 将自动打包并发布到 **Releases** 供用户一键下载。
+
+### 6. 类型检查与单元测试
 
 ```bash
 # TypeScript 类型检查

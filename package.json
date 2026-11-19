@@ -8,6 +8,8 @@
     "dev": "tsx server.ts",
     "start": "node server.ts",
     "build": "vite build",
+    "build:exe": "bun run scripts/build-exe.ts --target=win",
+    "build:exe:linux": "bun run scripts/build-exe.ts --target=linux",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
