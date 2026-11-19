@@ -16,8 +16,15 @@ import type {
   ExpKpi,
   HelperMemoGroup,
   IndustryCategory,
+  JdKeywordTier,
+  JdSemanticMatchReport,
+  JdSemanticSkillScore,
+  JdSemanticStatus,
+  JdStructuredExtractResult,
+  JdStructuredSkillItem,
   LocalAuditEnhancement,
   LocalCheckItem,
+  LocalJdKeywordDetail,
   LocalJdMatchResult,
   PdfPreflightIssue,
   PdfPreflightReport,
@@ -608,91 +615,1362 @@ export function createCustomRoleDoc(
 }
 
 const JD_STOPWORDS = new Set([
-  '岗位职责', '任职要求', '职位描述', '工作内容', '我们希望', '优先考虑', '具备良好', '沟通能力',
-  '团队合作', '学习能力', '责任心', '抗压能力', '本科及以上', '大专及以上', '相关专业', '工作经验',
-  '年以上', '负责', '参与', '完成', '熟悉', '掌握', '精通', '了解', '能够', '具有', '具备', '以及',
+  '岗位职责', '任职要求', '职位描述', '工作内容', '职位要求', '岗位要求', '我们希望', '加分项',
+  '优先考虑', '具备良好', '沟通能力', '沟通协调', '团队合作', '团队协作', '学习能力', '责任心',
+  '抗压能力', '抗压性', '抗压', '沟通', '协作', '配合', '学习', '执行力', '自驱力', '大局观', '同理心', '吃苦耐劳', '积极主动',
+  '本科及以上', '大专及以上', '硕士及以上', '统招本科', '相关专业', '工作经验', '相关经验',
+  '年以上', '五险一金', '周末双休', '带薪年假', '弹性工作', '薪资面议', '福利待遇', '扁平管理',
+  '商业嗅觉', '业务闭环', '底层逻辑', '核心抓手', '赋能业务', '颗粒度', '方法论', '结果导向',
+  '负责', '参与', '完成', '熟悉', '掌握', '精通', '了解', '能够', '具有', '具备', '以及',
   '或者', '根据', '进行', '提供', '支持', '协助', '推动', '优化', '提升', '管理', '公司', '部门',
   '团队', '业务', '项目', '系统', '平台', '方案', '流程', '工作', '能力', '经验', '优先', '学历',
   '专业', '相关', '良好', '优秀', '熟练', '独立', '以上', '需求', '问题', '分析', '设计', '执行',
-  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'have', 'will', 'are', 'you', 'our',
+  '使用', '开发', '应用', '工具', '软件', '技术', '方向', '领域', '日常', '核心', '基础', '主要',
+  '查询', '编写', '调优', '搭建', '绘图', '编程', '部署', '配置', '维护', '操作', '运用', '原理',
+  '框架', '总线', '语言', '技能', '知识', '水平', '背景', '模块', '功能', '体系', '建设', '梳理',
+  '落地', '推进', '统筹', '协同', '对接', '跟进', '输出', '沉淀', '复盘', '监测', '追踪', '处理',
+  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'have', 'will', 'are', 'you', 'our', 'can',
+  'use', 'using', 'strong', 'good', 'work', 'team', 'experience', 'skills', 'ability', 'preferred',
 ]);
 
+export interface JdSynonymGroup {
+  canonical: string;
+  aliases: string[];
+  /** Additional terms in a resume that satisfy this JD requirement (one-way entailment). */
+  satisfiedBy?: string[];
+}
+
+export const JD_SYNONYM_GROUPS: JdSynonymGroup[] = [
+  { canonical: 'Java', aliases: ['java', 'java语言', 'jdk', 'jvm', 'j2ee', 'javase'] },
+  { canonical: 'Python', aliases: ['python', 'python3', 'py', 'python语言'] },
+  { canonical: 'JavaScript', aliases: ['javascript', 'js', 'es6', 'es2015', 'ecmascript'] },
+  { canonical: 'TypeScript', aliases: ['typescript', 'ts'] },
+  { canonical: 'Go', aliases: ['go', 'golang', 'go语言'] },
+  { canonical: 'C/C++', aliases: ['c/c++', 'c++', 'cpp', 'c语言'] },
+  { canonical: 'C#', aliases: ['c#', 'csharp', '.net', 'dotnet'] },
+  {
+    canonical: 'SQL',
+    aliases: ['sql', 'sql查询', 'sql编写', 'sql调优', '数据库查询'],
+    satisfiedBy: ['mysql', 'postgresql', 'postgres', 'oracle', 'sql server', 'hive sql', 'spark sql', 'clickhouse', 'sqlite'],
+  },
+  { canonical: 'MySQL', aliases: ['mysql', 'mysql数据库', 'mariadb'] },
+  { canonical: 'PostgreSQL', aliases: ['postgresql', 'postgres', 'pg', 'pgsql'] },
+  { canonical: 'Redis', aliases: ['redis', 'redis缓存'] },
+  { canonical: 'React', aliases: ['react', 'reactjs', 'react.js', 'react18', 'react19'] },
+  { canonical: 'Vue', aliases: ['vue', 'vuejs', 'vue.js', 'vue2', 'vue3'] },
+  { canonical: 'Node.js', aliases: ['node.js', 'nodejs', 'node'] },
+  { canonical: 'Spring Boot', aliases: ['spring boot', 'springboot', 'springcloud', 'spring cloud', 'spring全家桶'] },
+  { canonical: 'Docker', aliases: ['docker', '容器化', '容器部署', '镜像构建'] },
+  { canonical: 'Kubernetes', aliases: ['kubernetes', 'k8s', '容器编排'] },
+  {
+    canonical: '消息队列',
+    aliases: ['消息队列', 'mq', '消息中间件'],
+    satisfiedBy: ['kafka', 'rabbitmq', 'rocketmq'],
+  },
+  { canonical: 'Kafka', aliases: ['kafka', 'apache kafka'] },
+  {
+    canonical: 'CI/CD',
+    aliases: ['ci/cd', 'cicd', '持续集成', '持续交付', '持续部署'],
+    satisfiedBy: ['jenkins', 'github actions', 'gitlab ci', 'devops'],
+  },
+  { canonical: 'Git', aliases: ['git', 'github', 'gitlab', '版本控制'] },
+  { canonical: 'Linux', aliases: ['linux', 'shell', 'bash', 'centos', 'ubuntu'] },
+  { canonical: 'Power BI', aliases: ['power bi', 'powerbi', 'pbi'] },
+  { canonical: 'Tableau', aliases: ['tableau', 'tableau看板'] },
+  {
+    canonical: 'BI 看板',
+    aliases: ['bi看板', 'bi', '商业智能', '数据可视化', '可视化看板', '经营驾驶舱', '数据看板', '报表搭建'],
+    satisfiedBy: ['tableau', 'power bi', 'powerbi', 'finebi', 'quickbi', 'superset', 'metabase', '飞书多维表格'],
+  },
+  {
+    canonical: 'Excel',
+    aliases: ['excel', 'powerquery', 'power query', '透视表', '数据透视表', 'vlookup', 'vba'],
+  },
+  {
+    canonical: '数据分析',
+    aliases: ['数据分析', '商业分析', '商业数据分析', '业务数据分析', 'ba', '数据挖掘', '增长归因', '业务归因', '漏斗分析', 'rfm'],
+  },
+  { canonical: 'A/B Test', aliases: ['a/b test', 'ab test', 'a/b测试', 'ab测试', 'ab实验', '对照实验', '显著性评估'] },
+  { canonical: '机器学习', aliases: ['机器学习', 'ml', 'machine learning', '深度学习', 'dl', '算法建模'] },
+  { canonical: '大模型 / LLM', aliases: ['大模型', 'llm', 'aigc', '大语言模型', 'prompt', 'rag', 'agent', '人工智能'] },
+  {
+    canonical: 'PLC',
+    aliases: ['plc', '可编程逻辑控制器', '西门子plc', '三菱plc'],
+    satisfiedBy: ['s7-1500', 's7-1200', 'fx5u', 'q系列'],
+  },
+  { canonical: 'TIA Portal', aliases: ['tia portal', '博途', '博图', '西门子博途'] },
+  { canonical: 'EPLAN', aliases: ['eplan', '电气制图', '电气原理图'] },
+  { canonical: 'PROFINET', aliases: ['profinet', '工业以太网'] },
+  { canonical: 'EtherCAT', aliases: ['ethercat', '工业总线'] },
+  { canonical: 'CAD', aliases: ['cad', 'autocad', 'solidworks', 'ug', 'proe', 'creo'] },
+  { canonical: 'ERP', aliases: ['erp', 'sap', '用友', '金蝶', '金蝶云', '浪潮'] },
+  { canonical: 'CPA', aliases: ['cpa', '注册会计师'] },
+  { canonical: '英语能力', aliases: ['英语', '英语流利', '英文读写', 'cet-6', 'cet6', '英语六级', '六级', 'ielts', '雅思', 'toefl', '托福'] },
+  { canonical: '项目管理', aliases: ['项目管理', 'pmp', '敏捷开发', 'scrum', 'jira'] },
+  { canonical: '产品设计', aliases: ['产品设计', '原型设计', 'axure', 'figma', 'prd', '需求文档', '交互设计'] },
+  { canonical: '用户增长', aliases: ['用户增长', '拉新', '留存', '复购', '用户分层', '私域运营'] },
+  { canonical: '供应链', aliases: ['供应链', 'scm', 'pmc', '采购管理', '库存周转', '进销存', 'wms'] },
+];
+
+const PROTECTED_SLASH_TERMS: Array<[RegExp, string, string]> = [
+  [/\bc\s*\/\s*c\+\+/gi, '__TOK_CCPP__', 'C/C++'],
+  [/\btcp\s*\/\s*ip/gi, '__TOK_TCPIP__', 'TCP/IP'],
+  [/\bci\s*\/\s*cd/gi, '__TOK_CICD__', 'CI/CD'],
+  [/\bui\s*\/\s*ux/gi, '__TOK_UIUX__', 'UI/UX'],
+  [/\ba\s*\/\s*b\b/gi, '__TOK_AB__', 'A/B'],
+  [/\bi\s*\/\s*o\b/gi, '__TOK_IO__', 'I/O'],
+  [/\bb2b\s*\/\s*b2c/gi, '__TOK_B2BC__', 'B2B/B2C'],
+];
+
+const PROFICIENCY_PREFIX_RE =
+  /^(?:能够|可以|需要|要求|必须|至少|并且|以及|或者|具备|具有|拥有|掌握|精通|熟悉|熟练使用|熟练掌握|熟练运用|熟练操作|熟练编写|熟悉使用|熟悉掌握|擅长|了解|使用过|有较强的|有良好的|较强的|良好的|优秀的|扎实的|丰富的|独立的|独立|深度|深入|全面|基本|优先考虑|优先|相关|有)+\s*/;
+
+const PROFICIENCY_SUFFIX_RE =
+  /\s*(?:开发经验|使用经验|操作经验|实践经验|项目经验|工作经验|相关经验|实战经验|应用经验|编程经验|经验丰富|经验者优先|者优先|优先考虑|优先|加分项|加分|能力强|能力|技能|技术栈|技术|知识|背景|水平|编程|等工具|等技术|等软件|等框架|等相关工具|等)+$/;
+
+const HR_FLUFF_RE =
+  /(?:抗压|大局观|核心抓手|业务闭环|底层逻辑|赋能业务|颗粒度|责任心|自驱力|同理心|吃苦耐劳|积极主动|五险一金|周末双休|带薪年假|弹性工作|薪资面议|福利待遇|扁平管理|团队合作|团队协作|沟通协调|沟通能力|学习能力|执行力|商业嗅觉|结果导向|本科及以上|大专及以上|硕士及以上|统招本科)/;
+
+const BONUS_CLAUSE_RE = /(?:优先|加分|了解即可|熟悉更好|更佳|bonus|plus|preferred|nice\s*to\s*have)/i;
+const CORE_CLAUSE_RE =
+  /(?:精通|必须|核心|主导|扎实的|熟练掌握|熟练使用|独立负责|硬性|必备|深入理解|must\s*have|required|proficient|expert)/i;
+
+function compactToken(s: string): string {
+  return s.toLowerCase().replace(/[\s._-]+/g, '');
+}
+
+const SYNONYM_LOOKUP = (() => {
+  const map = new Map<string, JdSynonymGroup>();
+  for (const group of JD_SYNONYM_GROUPS) {
+    map.set(group.canonical.toLowerCase(), group);
+    map.set(compactToken(group.canonical), group);
+    for (const alias of group.aliases) {
+      map.set(alias.toLowerCase(), group);
+      map.set(compactToken(alias), group);
+    }
+  }
+  return map;
+})();
+
 /**
- * Pure offline JD keyword gap matcher — requires zero AI/API key.
- * Extracts meaningful technical, tool, certification, and domain tokens from a pasted JD
- * and compares them against the entire rendered resume text.
+ * Step 1: Regex preprocessing pipeline to clean mojibake, zero-width control chars,
+ * HTML remnants, decorative emojis, full-width ASCII, and messy list formatting from pasted JDs.
  */
-export function analyzeJdMatchLocal(doc: ResumeDoc, jdText: string): LocalJdMatchResult {
-  const cleanJd = (jdText || '').trim();
-  if (!cleanJd) {
-    return { totalKeywords: 0, matched: [], missing: [], scorePct: 0 };
+export function preprocessJdText(raw: string): { cleaned: string; noiseRemovedCount: number } {
+  if (!raw) return { cleaned: '', noiseRemovedCount: 0 };
+  let text = raw;
+  let noiseRemovedCount = 0;
+
+  const stripWithCount = (re: RegExp, replacement: string) => {
+    text = text.replace(re, (m) => {
+      if (m !== replacement) noiseRemovedCount += 1;
+      return replacement;
+    });
+  };
+
+  // 1. Decode common HTML entities and strip raw HTML tags (when pasted from job boards)
+  stripWithCount(/&nbsp;/gi, ' ');
+  stripWithCount(/&amp;/gi, '&');
+  stripWithCount(/&lt;/gi, '<');
+  stripWithCount(/&gt;/gi, '>');
+  stripWithCount(/&quot;/gi, '"');
+  stripWithCount(/<[^>]{1,120}>/g, ' ');
+
+  // 2. Remove BOM, zero-width spaces, directional marks, replacement mojibake (U+FFFD), control chars, PUA icons
+  stripWithCount(
+    /[\uFEFF\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFFFD\uE000-\uF8FF\u2500-\u259F\x00-\x08\x0B\x0C\x0E-\x1F\x7F]+/g,
+    '',
+  );
+
+  // 3. Remove decorative emojis and dingbats while preserving punctuation
+  stripWithCount(/[\u2600-\u27BF]|[\u{1F300}-\u{1FAFF}]/gu, ' ');
+
+  // 4. Normalize full-width spaces and full-width ASCII characters (e.g. Ｊａｖａ -> Java, Ｃ＋＋ -> C++)
+  text = text.replace(/[\u00A0\u3000]/g, () => {
+    noiseRemovedCount += 1;
+    return ' ';
+  });
+  text = text.replace(/[\uFF01-\uFF5E]/g, (ch) => {
+    noiseRemovedCount += 1;
+    return String.fromCharCode(ch.charCodeAt(0) - 0xfee0);
+  });
+
+  // 5. Strip Markdown wrappers (**bold**, `code`, heading hashes)
+  stripWithCount(/[*`~_]{2,}|`+/g, ' ');
+  stripWithCount(/(^|\n)\s*#{1,6}\s+/g, '$1');
+
+  // 6. Normalize noisy list prefixes & bullets into crisp newlines
+  text = text.replace(/\r\n?/g, '\n');
+  stripWithCount(/(?:^|\n)\s*(?:(?:\d{1,2}|[①-⑩]|[a-zA-Z])\s*[.、)）:：]|[•●▪◆◇➢➤★☆▶■□-]\s*)/g, '\n');
+  stripWithCount(/[•●▪◆◇➢➤★☆▶■□]+/g, '\n');
+
+  // 7. Split slash-joined independent tech skills (e.g. SQL/Python -> SQL, Python) while keeping idioms like C/C++, CI/CD, A/B
+  for (const [re, placeholder] of PROTECTED_SLASH_TERMS) {
+    text = text.replace(re, placeholder);
+  }
+  text = text.replace(/([A-Za-z0-9+#\u4e00-\u9fa5])\s*[/／\\|｜]\s*([A-Za-z0-9+#\u4e00-\u9fa5])/g, '$1, $2');
+  for (const [, placeholder, restored] of PROTECTED_SLASH_TERMS) {
+    text = text.replaceAll(placeholder, restored);
   }
 
-  const resumeLower = formatPlainText(doc).toLowerCase();
-  const candidates = new Map<string, string>(); // lower -> display
+  // 8. Collapse repeated punctuation & whitespace
+  text = text
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 
-  // 1. Extract English/alphanumeric technical terms & acronyms (e.g., PLC, S7-1500, Python, EPLAN, Unity, CPA, SAP, GCP, B2B)
-  const techMatches = cleanJd.match(/[A-Za-z][A-Za-z0-9+#._/-]{1,20}/g) || [];
-  for (const raw of techMatches) {
-    const token = raw.replace(/^[./_-]+|[./_-]+$/g, '');
-    if (token.length < 2) continue;
-    const low = token.toLowerCase();
-    if (JD_STOPWORDS.has(low)) continue;
-    if (!candidates.has(low)) candidates.set(low, token);
+  return { cleaned: text, noiseRemovedCount };
+}
+
+/**
+ * Strip proficiency verbs/modifiers ("熟练使用 Java" -> "Java") and map through the synonym lexicon
+ * so equivalent expressions collapse into one canonical keyword.
+ */
+export function normalizeJdKeyword(rawPhrase: string): {
+  canonical: string;
+  key: string;
+  synonymGroup?: JdSynonymGroup;
+} | null {
+  let phrase = rawPhrase
+    .trim()
+    .replace(/^[./_,，。；;、：:（）()【】\[\]《》"'·\-—]+|[./_,，。；;、：:（）()【】\[\]《》"'·\-—]+$/g, '')
+    .trim();
+
+  if (!phrase) return null;
+  if (JD_STOPWORDS.has(phrase) || JD_STOPWORDS.has(phrase.toLowerCase()) || HR_FLUFF_RE.test(phrase)) {
+    return null;
   }
 
-  // 2. Extract high-signal Chinese domain phrases (split by punctuation & common glue words)
-  const cnChunks = cleanJd
-    .replace(/[A-Za-z0-9+#._/-]+/g, ' ')
-    .split(/[\s,，。；;、：:（）()【】\[\]《》“”"'·！？!?/\\|•\-—\n\r]+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length >= 2);
-
-  for (const chunk of cnChunks) {
-    // Extract concise 2-6 char phrases inside longer clauses by splitting on common verbs/particles
-    const subParts = chunk
-      .split(/(?:负责|参与|熟练使用|熟悉|精通|掌握|了解|具备|具有|能够|以及|并且|进行|开展|推动|完成|协助|配合|优化|提升|需要|优先|经验|能力|的|与|和|及|等|或|对|在|为)/)
-      .map((p) => p.trim())
-      .filter((p) => p.length >= 2 && p.length <= 8);
-
-    for (const part of subParts) {
-      if (JD_STOPWORDS.has(part)) continue;
-      if (/^[一二三四五六七八九十\d]+[年月日岁科级天项次]?$/.test(part)) continue;
-      const low = part.toLowerCase();
-      if (!candidates.has(low)) candidates.set(low, part);
+  // Strip proficiency modifiers repeatedly ("熟练使用 Java 开发经验" -> "Java")
+  let prev = '';
+  while (phrase && phrase !== prev) {
+    prev = phrase;
+    phrase = phrase.replace(PROFICIENCY_PREFIX_RE, '').trim();
+    if (JD_STOPWORDS.has(phrase) || JD_STOPWORDS.has(phrase.toLowerCase())) return null;
+    const strippedSuffix = phrase.replace(PROFICIENCY_SUFFIX_RE, '').trim();
+    if (strippedSuffix.length >= 2) {
+      phrase = strippedSuffix;
+    }
+    const strippedAsciiTrail = phrase
+      .replace(/^([A-Za-z][A-Za-z0-9+#._/\s-]{1,22})\s*(?:开发|语言|框架|数据库)$/, '$1')
+      .trim();
+    if (strippedAsciiTrail.length >= 2) {
+      phrase = strippedAsciiTrail;
     }
   }
 
-  // Keep up to 24 highest-signal keywords (prioritize English/tech terms & concise 2-5 char domain terms)
-  const ranked = Array.from(candidates.entries())
+  phrase = phrase.replace(/\s{2,}/g, ' ').trim();
+  if (phrase.length < 2) {
+    // Allow single-letter languages only when explicit like C# / R? Keep min length 2 unless in lexicon
+    const exactSingle = SYNONYM_LOOKUP.get(phrase.toLowerCase());
+    if (!exactSingle) return null;
+    return {
+      canonical: exactSingle.canonical,
+      key: exactSingle.canonical.toLowerCase(),
+      synonymGroup: exactSingle,
+    };
+  }
+
+  const low = phrase.toLowerCase();
+  if (JD_STOPWORDS.has(phrase) || JD_STOPWORDS.has(low)) return null;
+  if (/^[一二三四五六七八九十\d]+[年月日岁科级天项次万千百个以上内]?$/.test(phrase)) return null;
+
+  const group = SYNONYM_LOOKUP.get(low) || SYNONYM_LOOKUP.get(compactToken(phrase));
+  if (group) {
+    return {
+      canonical: group.canonical,
+      key: group.canonical.toLowerCase(),
+      synonymGroup: group,
+    };
+  }
+
+  return {
+    canonical: phrase,
+    key: low,
+  };
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function containsTermWithBoundary(resumeLower: string, resumeCompact: string, term: string): boolean {
+  const low = term.toLowerCase().trim();
+  if (!low) return false;
+  const hasCjk = /[\u4e00-\u9fa5]/.test(low);
+  const isPureAscii = /^[a-z0-9+#._/\s-]+$/i.test(low);
+
+  if (isPureAscii) {
+    // Use strict alphanumeric boundaries to avoid false positives like "go" matching "mongodb"/"google"
+    const boundaryRe = new RegExp(`(?<![a-z0-9])${escapeRegExp(low)}(?![a-z0-9])`, 'i');
+    if (boundaryRe.test(resumeLower)) return true;
+
+    // Also handle spacing/hyphen variants for multi-part tech tokens ("Power BI" vs "PowerBI", "S7-1500" vs "S71500")
+    if (/[\s._-]/.test(low)) {
+      const compact = compactToken(low);
+      if (compact.length >= 4) {
+        const compactRe = new RegExp(`(?<![a-z0-9])${escapeRegExp(compact)}(?![a-z0-9])`, 'i');
+        if (compactRe.test(resumeCompact)) return true;
+      }
+    }
+    return false;
+  }
+
+  if (hasCjk) {
+    if (resumeLower.includes(low)) return true;
+    const compact = compactToken(low);
+    if (compact.length >= 3 && resumeCompact.includes(compact)) return true;
+  }
+
+  return resumeLower.includes(low);
+}
+
+function extractBigrams(text: string): Set<string> {
+  const clean = text.toLowerCase().replace(/[^\u4e00-\u9fa5a-z0-9]/g, '');
+  const set = new Set<string>();
+  for (let i = 0; i < clean.length - 1; i++) {
+    set.add(clean.slice(i, i + 2));
+  }
+  return set;
+}
+
+function findFuzzyResumeMatch(
+  keyword: string,
+  resumeClauses: string[],
+): { matchedSnippet: string; similarity: number } | null {
+  const cjkChars = keyword.replace(/[^\u4e00-\u9fa5]/g, '');
+  // Only apply fuzzy semantic bigram matching to multi-character Chinese or mixed descriptive phrases
+  if (cjkChars.length < 4) return null;
+
+  const kwBigrams = extractBigrams(keyword);
+  if (kwBigrams.size < 3) return null;
+
+  let bestScore = 0;
+  let bestSnippet = '';
+
+  for (const clause of resumeClauses) {
+    if (clause.length < 4) continue;
+    const clauseBigrams = extractBigrams(clause);
+    if (clauseBigrams.size < 2) continue;
+
+    let sharedBigrams = 0;
+    for (const bg of kwBigrams) {
+      if (clauseBigrams.has(bg)) sharedBigrams += 1;
+    }
+    if (sharedBigrams < 2) continue;
+
+    // Asymmetric containment similarity: how much of the JD phrase is semantically covered by this resume clause
+    const bigramCoverage = sharedBigrams / kwBigrams.size;
+
+    // Bonus check on unique CJK character overlap to prevent coincidence on generic glue bigrams
+    const kwCharSet = new Set(cjkChars.split(''));
+    let sharedChars = 0;
+    for (const ch of kwCharSet) {
+      if (clause.includes(ch)) sharedChars += 1;
+    }
+    const charCoverage = sharedChars / kwCharSet.size;
+
+    const combined = bigramCoverage * 0.65 + charCoverage * 0.35;
+    if (combined > bestScore) {
+      bestScore = combined;
+      bestSnippet = clause.length > 26 ? `${clause.slice(0, 26)}…` : clause;
+    }
+  }
+
+  if (bestScore >= 0.62) {
+    return {
+      matchedSnippet: bestSnippet,
+      similarity: Math.round(bestScore * 100) / 100,
+    };
+  }
+  return null;
+}
+
+/**
+ * Step 2a (Local Engine): Extract ranked hard-skill candidates from JD text completely offline.
+ */
+export function extractLocalJdSkills(jdText: string): {
+  skills: JdStructuredSkillItem[];
+  cleanedJd: string;
+  noiseRemovedCount: number;
+} {
+  const { cleaned: cleanJd, noiseRemovedCount } = preprocessJdText(jdText || '');
+  if (!cleanJd) {
+    return { skills: [], cleanedJd: '', noiseRemovedCount };
+  }
+
+  interface CandidateAcc {
+    canonical: string;
+    weight: number;
+    tier: JdKeywordTier;
+    count: number;
+    isKnownLexicon: boolean;
+    isAsciiTech: boolean;
+    synonymGroup?: JdSynonymGroup;
+    surfaceTerms: Set<string>;
+  }
+
+  const candidates = new Map<string, CandidateAcc>();
+
+  const registerCandidate = (
+    rawTerm: string,
+    clauseTier: JdKeywordTier,
+    clauseBaseWeight: number,
+    clauseRegisteredKeys: Set<string>,
+    lexiconBoost = 0,
+    surfaceHint?: string,
+  ) => {
+    const normalized = normalizeJdKeyword(rawTerm);
+    if (!normalized) return;
+    if (clauseRegisteredKeys.has(normalized.key)) return;
+    clauseRegisteredKeys.add(normalized.key);
+
+    const existing = candidates.get(normalized.key);
+    const isAsciiTech = /[a-z]/i.test(normalized.canonical);
+    const isKnownLexicon = Boolean(normalized.synonymGroup);
+    const itemWeight =
+      clauseBaseWeight + (isKnownLexicon ? 1.2 + lexiconBoost : 0) + (isAsciiTech ? 0.6 : 0);
+    const cleanSurface = (surfaceHint || rawTerm).trim();
+
+    if (existing) {
+      existing.count += 1;
+      existing.weight = Math.min(10, Math.max(existing.weight, itemWeight) + 0.5);
+      if (cleanSurface) existing.surfaceTerms.add(cleanSurface);
+      if (clauseTier === 'core' || (clauseTier === 'standard' && existing.tier === 'bonus')) {
+        existing.tier = clauseTier;
+      }
+      if (!existing.synonymGroup && normalized.synonymGroup) {
+        existing.synonymGroup = normalized.synonymGroup;
+        existing.isKnownLexicon = true;
+      }
+      return;
+    }
+
+    const surfaceTerms = new Set<string>();
+    if (cleanSurface) surfaceTerms.add(cleanSurface);
+
+    candidates.set(normalized.key, {
+      canonical: normalized.canonical,
+      weight: itemWeight,
+      tier: clauseTier,
+      count: 1,
+      isKnownLexicon,
+      isAsciiTech,
+      synonymGroup: normalized.synonymGroup,
+      surfaceTerms,
+    });
+  };
+
+  // Split cleaned JD into requirement clauses to preserve core vs bonus weighting
+  const clauses = cleanJd
+    .split(/[\n。；;！？!?]+/)
+    .map((c) => c.trim())
+    .filter((c) => c.length >= 2);
+
+  for (const clause of clauses) {
+    const clauseTier: JdKeywordTier = BONUS_CLAUSE_RE.test(clause)
+      ? 'bonus'
+      : CORE_CLAUSE_RE.test(clause)
+        ? 'core'
+        : 'standard';
+    const clauseBaseWeight = clauseTier === 'core' ? 3 : clauseTier === 'standard' ? 2 : 1;
+    const clauseLower = clause.toLowerCase();
+    const clauseCompact = compactToken(clause);
+    const clauseRegisteredKeys = new Set<string>();
+    let clauseForTechScan = clause;
+
+    // A. Positive dictionary match first (catches multi-word tech terms like "TIA Portal", "Power BI", "Spring Boot", "A/B Test", and domain terms)
+    for (const group of JD_SYNONYM_GROUPS) {
+      const termsToProbe = [group.canonical, ...group.aliases];
+      const matchedTerm = termsToProbe.find((t) => containsTermWithBoundary(clauseLower, clauseCompact, t));
+      if (matchedTerm) {
+        registerCandidate(
+          group.canonical,
+          clauseTier,
+          clauseBaseWeight,
+          clauseRegisteredKeys,
+          0.4,
+          matchedTerm,
+        );
+        // Blank out matched multi-word ASCII spans (e.g. "TIA Portal", "Power BI", "Spring Boot") so sub-tokens don't leak in Step B
+        for (const term of termsToProbe) {
+          if (/^[a-z0-9+#._/\s-]+$/i.test(term) && /\s/.test(term)) {
+            const spanRe = new RegExp(`(?<![a-z0-9])${escapeRegExp(term)}(?![a-z0-9])`, 'gi');
+            clauseForTechScan = clauseForTechScan.replace(spanRe, ' ');
+          }
+        }
+      }
+    }
+
+    // B. Extract English / alphanumeric technical terms & acronyms (e.g. S7-1500, EPLAN, TwinCAT, LabVIEW, React, Vue3)
+    const techMatches = clauseForTechScan.match(/[A-Za-z][A-Za-z0-9+#._-]{1,22}/g) || [];
+    for (const raw of techMatches) {
+      const token = raw.replace(/^[./_-]+|[./_-]+$/g, '');
+      if (token.length < 2) continue;
+      registerCandidate(token, clauseTier, clauseBaseWeight, clauseRegisteredKeys, 0, token);
+    }
+
+    // C. Extract Chinese domain phrases (cleaning proficiency modifiers like "熟练使用" / "熟悉" automatically)
+    const cnChunks = clause
+      .replace(/[A-Za-z0-9+#._-]+/g, ' ')
+      .split(/[\s,，、：:（）()【】\[\]《》“”"'·]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 2);
+
+    for (const chunk of cnChunks) {
+      const subParts = chunk
+        .split(/(?:负责|参与|熟练使用|熟练掌握|熟练运用|熟悉|精通|掌握|了解|具备|具有|能够|以及|并且|进行|开展|推动|完成|协助|配合|优化|提升|需要|优先|经验|能力|的|与|和|及|等|或|对|在|为)/)
+        .map((p) => p.trim())
+        .filter((p) => p.length >= 2 && p.length <= 10);
+
+      for (const part of subParts) {
+        registerCandidate(part, clauseTier, clauseBaseWeight, clauseRegisteredKeys, 0, part);
+      }
+    }
+  }
+
+  const skills: JdStructuredSkillItem[] = Array.from(candidates.values())
     .sort((a, b) => {
-      const aAscii = /[a-z]/i.test(a[1]) ? 0 : 1;
-      const bAscii = /[a-z]/i.test(b[1]) ? 0 : 1;
-      if (aAscii !== bAscii) return aAscii - bAscii;
-      return a[1].length - b[1].length;
+      if (b.weight !== a.weight) return b.weight - a.weight;
+      if (b.count !== a.count) return b.count - a.count;
+      if (a.isKnownLexicon !== b.isKnownLexicon) return a.isKnownLexicon ? -1 : 1;
+      if (a.isAsciiTech !== b.isAsciiTech) return a.isAsciiTech ? -1 : 1;
+      return a.canonical.length - b.canonical.length;
     })
-    .slice(0, 24);
+    .slice(0, 24)
+    .map((item) => ({
+      keyword: item.canonical,
+      tier: item.tier,
+      weight: item.weight,
+      count: item.count,
+      source: 'local',
+      surfaceTerms: Array.from(item.surfaceTerms),
+    }));
+
+  return { skills, cleanedJd: cleanJd, noiseRemovedCount };
+}
+
+/**
+ * Step 3 (Unified Matcher): Evaluate any structured skill list (local offline, LLM-extracted, or user-curated)
+ * against the resume using exact word-boundary, synonym lexicon, and Chinese bigram fuzzy matching.
+ */
+export function evaluateJdSkillsAgainstResume(
+  doc: ResumeDoc,
+  skills: JdStructuredSkillItem[],
+  meta?: { cleanedJd?: string; noiseRemovedCount?: number },
+): LocalJdMatchResult {
+  const cleanedJd = meta?.cleanedJd || '';
+  const noiseRemovedCount = meta?.noiseRemovedCount || 0;
+
+  if (!skills || skills.length === 0) {
+    return {
+      totalKeywords: 0,
+      matched: [],
+      missing: [],
+      scorePct: 0,
+      cleanedJd,
+      noiseRemovedCount,
+      synonymMatchedCount: 0,
+      fuzzyMatchedCount: 0,
+      matchedDetails: [],
+      missingDetails: [],
+    };
+  }
+
+  const plainResume = formatPlainText(doc);
+  const { cleaned: cleanedResume } = preprocessJdText(plainResume);
+  const resumeLower = cleanedResume.toLowerCase();
+  const resumeCompact = compactToken(cleanedResume);
+  const resumeClauses = cleanedResume
+    .split(/[\n,，。；;、：:（）()【】\[\]]+/)
+    .map((c) => c.trim())
+    .filter((c) => c.length >= 4);
+
+  interface EvalItem {
+    canonical: string;
+    key: string;
+    tier: JdKeywordTier;
+    weight: number;
+    category?: string;
+    source: 'local' | 'llm' | 'manual';
+    synonymGroup?: JdSynonymGroup;
+    surfaceTerms: Set<string>;
+  }
+
+  const deduped = new Map<string, EvalItem>();
+
+  for (const rawItem of skills) {
+    const rawKw = (rawItem.keyword || '').trim();
+    if (!rawKw) continue;
+    const isManual = rawItem.source === 'manual';
+    const normalized = normalizeJdKeyword(rawKw);
+    const canonical = normalized ? normalized.canonical : isManual ? rawKw : '';
+    if (!canonical) continue;
+
+    const key = normalized ? normalized.key : canonical.toLowerCase();
+    const tier: JdKeywordTier =
+      rawItem.tier === 'core' || rawItem.tier === 'bonus' ? rawItem.tier : 'standard';
+    const baseWeight = tier === 'core' ? 3 : tier === 'standard' ? 2 : 1;
+    const computedWeight =
+      typeof rawItem.weight === 'number' && Number.isFinite(rawItem.weight)
+        ? rawItem.weight
+        : baseWeight + (normalized?.synonymGroup ? 1.2 : 0) + (/[a-z]/i.test(canonical) ? 0.6 : 0);
+
+    const existing = deduped.get(key);
+    const incomingSurfaces =
+      rawItem.surfaceTerms && rawItem.surfaceTerms.length > 0 ? rawItem.surfaceTerms : [rawKw];
+
+    if (existing) {
+      if (tier === 'core' || (tier === 'standard' && existing.tier === 'bonus')) {
+        existing.tier = tier;
+      }
+      existing.weight = Math.max(existing.weight, computedWeight);
+      if (!existing.category && rawItem.category) existing.category = rawItem.category;
+      if (isManual) existing.source = 'manual';
+      for (const s of incomingSurfaces) {
+        if (s.trim()) existing.surfaceTerms.add(s.trim());
+      }
+      continue;
+    }
+
+    deduped.set(key, {
+      canonical,
+      key,
+      tier,
+      weight: computedWeight,
+      category: rawItem.category?.trim() || undefined,
+      source: rawItem.source || 'local',
+      synonymGroup: normalized?.synonymGroup,
+      surfaceTerms: new Set(incomingSurfaces.map((s) => s.trim()).filter(Boolean)),
+    });
+  }
+
+  const tierRank = (t: JdKeywordTier) => (t === 'core' ? 3 : t === 'standard' ? 2 : 1);
+  const ranked = Array.from(deduped.values()).sort((a, b) => {
+    if (b.weight !== a.weight) return b.weight - a.weight;
+    if (tierRank(b.tier) !== tierRank(a.tier)) return tierRank(b.tier) - tierRank(a.tier);
+    return a.canonical.length - b.canonical.length;
+  });
 
   const matched: string[] = [];
   const missing: string[] = [];
+  const matchedDetails: LocalJdKeywordDetail[] = [];
+  const missingDetails: LocalJdKeywordDetail[] = [];
 
-  for (const [low, display] of ranked) {
-    if (resumeLower.includes(low)) {
-      matched.push(display);
-    } else {
-      missing.push(display);
+  let totalWeight = 0;
+  let earnedWeight = 0;
+  let synonymMatchedCount = 0;
+  let fuzzyMatchedCount = 0;
+
+  const hasLiteralSurfaceHit = (term: string): boolean => {
+    const low = term.toLowerCase().trim();
+    if (!low) return false;
+    if (/^[a-z0-9+#._/\s-]+$/i.test(low)) {
+      return new RegExp(`(?<![a-z0-9])${escapeRegExp(low)}(?![a-z0-9])`, 'i').test(resumeLower);
     }
+    return resumeLower.includes(low);
+  };
+
+  for (const item of ranked) {
+    const scoreWeight = item.tier === 'core' ? 3 : item.tier === 'standard' ? 2 : 1;
+    totalWeight += scoreWeight;
+
+    const surfaceList = Array.from(item.surfaceTerms);
+    const directSurfaceHit = surfaceList.some((s) => hasLiteralSurfaceHit(s));
+
+    // 1. Direct literal match of the exact surface term mentioned in JD
+    if (directSurfaceHit) {
+      matched.push(item.canonical);
+      matchedDetails.push({
+        keyword: item.canonical,
+        weight: Number(item.weight.toFixed(1)),
+        tier: item.tier,
+        matchType: 'exact',
+        category: item.category,
+        source: item.source,
+      });
+      earnedWeight += scoreWeight;
+      continue;
+    }
+
+    // 2. Synonym lexicon match (canonical/aliases/spacing variants/one-way entailment e.g. K8s <-> Kubernetes, Power BI <-> PowerBI, SQL <- MySQL)
+    if (item.synonymGroup) {
+      const aliasPool = [
+        item.synonymGroup.canonical,
+        ...item.synonymGroup.aliases,
+        ...(item.synonymGroup.satisfiedBy || []),
+      ];
+      const matchedAlias = aliasPool.find((alias) =>
+        containsTermWithBoundary(resumeLower, resumeCompact, alias),
+      );
+      if (matchedAlias) {
+        synonymMatchedCount += 1;
+        matched.push(item.canonical);
+        matchedDetails.push({
+          keyword: item.canonical,
+          weight: Number(item.weight.toFixed(1)),
+          tier: item.tier,
+          matchType: 'synonym',
+          matchedVia: matchedAlias,
+          category: item.category,
+          source: item.source,
+        });
+        earnedWeight += scoreWeight;
+        continue;
+      }
+    } else if (containsTermWithBoundary(resumeLower, resumeCompact, item.canonical)) {
+      matched.push(item.canonical);
+      matchedDetails.push({
+        keyword: item.canonical,
+        weight: Number(item.weight.toFixed(1)),
+        tier: item.tier,
+        matchType: 'exact',
+        category: item.category,
+        source: item.source,
+      });
+      earnedWeight += scoreWeight;
+      continue;
+    }
+
+    // 3. Fuzzy bigram overlap match for ambiguous Chinese descriptive phrases
+    const fuzzy = findFuzzyResumeMatch(item.canonical, resumeClauses);
+    if (fuzzy) {
+      fuzzyMatchedCount += 1;
+      matched.push(item.canonical);
+      matchedDetails.push({
+        keyword: item.canonical,
+        weight: Number(item.weight.toFixed(1)),
+        tier: item.tier,
+        matchType: 'fuzzy',
+        matchedVia: fuzzy.matchedSnippet,
+        similarity: fuzzy.similarity,
+        category: item.category,
+        source: item.source,
+      });
+      earnedWeight += scoreWeight * Math.min(0.95, Math.max(0.75, fuzzy.similarity));
+      continue;
+    }
+
+    missing.push(item.canonical);
+    missingDetails.push({
+      keyword: item.canonical,
+      weight: Number(item.weight.toFixed(1)),
+      tier: item.tier,
+      matchType: 'missing',
+      category: item.category,
+      source: item.source,
+    });
   }
 
   const totalKeywords = matched.length + missing.length;
-  const scorePct = totalKeywords > 0 ? Math.round((matched.length / totalKeywords) * 100) : 0;
+  const scorePct = totalWeight > 0 ? Math.min(100, Math.round((earnedWeight / totalWeight) * 100)) : 0;
 
   return {
     totalKeywords,
     matched,
     missing,
     scorePct,
+    cleanedJd,
+    noiseRemovedCount,
+    synonymMatchedCount,
+    fuzzyMatchedCount,
+    matchedDetails,
+    missingDetails,
   };
+}
+
+/**
+ * Pure offline JD keyword gap matcher — requires zero AI/API key.
+ * Pipeline:
+ * 1) Regex preprocessing (cleans mojibake, zero-width chars, HTML, full-width ASCII, bullets, slashes)
+ * 2) Proficiency modifier stripping + synonym lexicon mapping ("熟练使用 Java" == "熟悉 Java" -> "Java")
+ * 3) Weighted priority ranking (core requirements > standard > bonus/optional + frequency & lexicon boost)
+ * 4) Word-boundary exact match -> synonym alias match -> Chinese bigram fuzzy match for ambiguous descriptions
+ */
+export function analyzeJdMatchLocal(doc: ResumeDoc, jdText: string): LocalJdMatchResult {
+  const { skills, cleanedJd, noiseRemovedCount } = extractLocalJdSkills(jdText);
+  return evaluateJdSkillsAgainstResume(doc, skills, { cleanedJd, noiseRemovedCount });
+}
+
+export const JD_EXTRACT_SYSTEM_PROMPT =
+  '你是一个资深的 HR 和技术专家。请阅读以下 JD，并提取硬性要求。忽略所有软性要求（如沟通能力强、抗压、有责任心、团队合作、大局观等）。将提取出的技能词按分类输出为 JSON 格式（例如：前端、后端、数据库、工程工具、加分项，若为非技术岗位可按岗位贴切分类输出）。如果遇到「精通 A，熟悉 B，了解 C」这类不同熟练度表述，请拆分为独立技能并标注对应层级（core=精通/必须，standard=熟悉/掌握，bonus=了解/优先/加分）。';
+
+/**
+ * Build a complete copy-pasteable prompt for zero-config external LLM structured JD extraction.
+ */
+export function buildJdExtractPrompt(jdText: string, roleHint?: string): string {
+  const { cleaned } = preprocessJdText(jdText || '');
+  const parts = [
+    JD_EXTRACT_SYSTEM_PROMPT,
+    roleHint ? `【参考岗位方向】${roleHint.trim()}` : '',
+    `【目标岗位 JD】\n${(cleaned || jdText || '').trim()}`,
+    `【输出格式要求（请仅输出严格合法 JSON，可直接粘贴回简历工坊渲染分类标签）】
+\`\`\`json
+{
+  "categories": [
+    {
+      "name": "前端 / 后端 / 数据库 / 工具与平台 / 领域能力 / 加分项",
+      "items": [
+        { "keyword": "Java", "tier": "core" },
+        { "keyword": "Redis", "tier": "standard" },
+        { "keyword": "Rust", "tier": "bonus" }
+      ]
+    }
+  ],
+  "ignoredSoftSkills": ["抗压能力强", "沟通能力好"]
+}
+\`\`\``,
+  ].filter(Boolean);
+  return parts.join('\n\n');
+}
+
+function inferTierFromLabel(raw: unknown, categoryName = ''): JdKeywordTier {
+  const catLow = categoryName.toLowerCase();
+  if (/加分|优先|bonus|plus|nice/i.test(catLow)) return 'bonus';
+  const s = String(raw || '').toLowerCase().trim();
+  if (/^(core|must|high|required|expert|proficient)$|精通|必须|核心|硬性|熟练掌握|熟练使用/.test(s)) {
+    return 'core';
+  }
+  if (/^(bonus|low|optional|plus|preferred|familiar)$|了解|优先|加分|选修/.test(s)) {
+    return 'bonus';
+  }
+  return 'standard';
+}
+
+/**
+ * Normalize structured JSON returned by `/api/ai/extract-jd` OR pasted from external LLMs.
+ * Supports both `{ categories: [{ name, items }] }` and flat `{ "前端": [...], "数据库": [...], "加分项": [...] }` shapes.
+ */
+export function normalizeStructuredJdExtract(raw: unknown): JdStructuredExtractResult {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('JSON 根结构必须是对象（包含 categories 数组或按分类命名的键值对）。');
+  }
+  const obj = raw as Record<string, unknown>;
+  const categories: JdStructuredExtractResult['categories'] = [];
+  const ignoredSoftSkills: string[] = [];
+
+  const collectSoft = (val: unknown) => {
+    if (!Array.isArray(val)) return;
+    for (const v of val) {
+      const s = String(v || '').trim();
+      if (s && !ignoredSoftSkills.includes(s)) ignoredSoftSkills.push(s);
+    }
+  };
+  collectSoft(obj.ignoredSoftSkills ?? obj.ignored_soft_skills ?? obj.softSkillsIgnored);
+
+  const parseItems = (rawItems: unknown, categoryName: string): Array<{ keyword: string; tier: JdKeywordTier }> => {
+    if (!Array.isArray(rawItems)) return [];
+    const out: Array<{ keyword: string; tier: JdKeywordTier }> = [];
+    const seen = new Set<string>();
+
+    for (const entry of rawItems) {
+      let keyword = '';
+      let tier: JdKeywordTier = inferTierFromLabel('', categoryName);
+
+      if (typeof entry === 'string') {
+        const trimmed = entry.trim();
+        if (!trimmed) continue;
+        if (CORE_CLAUSE_RE.test(trimmed)) tier = 'core';
+        else if (BONUS_CLAUSE_RE.test(trimmed) || /^了解/.test(trimmed)) tier = 'bonus';
+        const norm = normalizeJdKeyword(trimmed);
+        keyword = norm ? norm.canonical : trimmed;
+      } else if (entry && typeof entry === 'object') {
+        const rec = entry as Record<string, unknown>;
+        const rawKw = String(rec.keyword ?? rec.skill ?? rec.name ?? rec.term ?? '').trim();
+        if (!rawKw) continue;
+        const norm = normalizeJdKeyword(rawKw);
+        keyword = norm ? norm.canonical : rawKw;
+        tier = inferTierFromLabel(rec.tier ?? rec.level ?? rec.proficiency ?? rec.priority ?? rawKw, categoryName);
+      }
+
+      if (!keyword || HR_FLUFF_RE.test(keyword)) continue;
+      const key = keyword.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ keyword, tier });
+    }
+    return out;
+  };
+
+  if (Array.isArray(obj.categories)) {
+    for (const cat of obj.categories) {
+      if (!cat || typeof cat !== 'object') continue;
+      const rec = cat as Record<string, unknown>;
+      const name = String(rec.name ?? rec.category ?? rec.title ?? '核心要求').trim() || '核心要求';
+      const items = parseItems(rec.items ?? rec.skills ?? rec.keywords, name);
+      if (items.length > 0) {
+        categories.push({ name, items });
+      }
+    }
+  } else {
+    // Support flexible flat object format like { "前端": ["React"], "后端": [{ name: "Java", level: "精通" }], "加分项": ["Rust"] }
+    for (const [key, val] of Object.entries(obj)) {
+      if (/^(ignoredSoftSkills|ignored_soft_skills|softSkillsIgnored|summary|note|meta)$/i.test(key)) {
+        continue;
+      }
+      if (Array.isArray(val)) {
+        const items = parseItems(val, key);
+        if (items.length > 0) {
+          categories.push({ name: key.trim(), items });
+        }
+      } else if (val && typeof val === 'object') {
+        // Handle nested proficiency object like { "精通": ["Java"], "了解": ["Go"] }
+        const nestedItems: Array<{ keyword: string; tier: JdKeywordTier }> = [];
+        for (const [subKey, subVal] of Object.entries(val as Record<string, unknown>)) {
+          if (Array.isArray(subVal)) {
+            const subTier = inferTierFromLabel(subKey, key);
+            for (const item of parseItems(subVal, key)) {
+              nestedItems.push({ keyword: item.keyword, tier: subTier });
+            }
+          }
+        }
+        if (nestedItems.length > 0) {
+          categories.push({ name: key.trim(), items: nestedItems });
+        }
+      }
+    }
+  }
+
+  if (categories.length === 0) {
+    throw new Error('JSON 中未找到有效的技能分类数组，请确认已复制完整的结构化 JSON。');
+  }
+
+  return {
+    categories,
+    ignoredSoftSkills: ignoredSoftSkills.length > 0 ? ignoredSoftSkills : undefined,
+  };
+}
+
+/**
+ * Parse external LLM structured JD extraction JSON (supports DeepSeek-R1 <think> blocks & markdown fences).
+ */
+export function parseExternalJdExtractJson(rawText: string): JdStructuredExtractResult {
+  const stripped = (rawText || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  if (!stripped) {
+    throw new Error('请先粘贴大模型返回的结构化 JD JSON 内容。');
+  }
+  const fenced = stripped.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  let candidate = fenced && fenced[1] ? fenced[1].trim() : stripped;
+  const firstBrace = candidate.indexOf('{');
+  const lastBrace = candidate.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    candidate = candidate.slice(firstBrace, lastBrace + 1);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    throw new Error('无法解析为合法 JSON，请检查是否复制完整（需以 { 开头、} 结尾）。');
+  }
+  return normalizeStructuredJdExtract(parsed);
+}
+
+/**
+ * Flatten categorized LLM extraction result into unified JdStructuredSkillItem[] for matching & user editing.
+ */
+export function flattenStructuredJdSkills(
+  extracted: JdStructuredExtractResult,
+): JdStructuredSkillItem[] {
+  const list: JdStructuredSkillItem[] = [];
+  for (const cat of extracted.categories) {
+    for (const item of cat.items) {
+      list.push({
+        keyword: item.keyword,
+        tier: item.tier,
+        category: cat.name,
+        source: 'llm',
+        surfaceTerms: [item.keyword],
+      });
+    }
+  }
+  return list;
+}
+
+/**
+ * Split cleaned JD text into segments highlighting active extracted keywords in-context.
+ */
+export function highlightJdSegments(
+  cleanedJd: string,
+  details: LocalJdKeywordDetail[],
+): Array<{ text: string; detail?: LocalJdKeywordDetail }> {
+  if (!cleanedJd) return [];
+  if (!details.length) return [{ text: cleanedJd }];
+
+  const termToDetail = new Map<string, LocalJdKeywordDetail>();
+  const probeTerms: string[] = [];
+
+  for (const detail of details) {
+    const low = detail.keyword.toLowerCase();
+    if (!termToDetail.has(low)) {
+      termToDetail.set(low, detail);
+      probeTerms.push(detail.keyword);
+    }
+    const group = SYNONYM_LOOKUP.get(low) || SYNONYM_LOOKUP.get(compactToken(detail.keyword));
+    if (group) {
+      for (const alias of group.aliases) {
+        if (alias.length < 2) continue;
+        const aLow = alias.toLowerCase();
+        if (!termToDetail.has(aLow)) {
+          termToDetail.set(aLow, detail);
+          probeTerms.push(alias);
+        }
+      }
+    }
+  }
+
+  // Sort longest first so multi-word terms like "Power BI" or "TIA Portal" match before shorter substrings
+  probeTerms.sort((a, b) => b.length - a.length);
+  const patternParts = probeTerms.slice(0, 80).map((t) => {
+    const esc = escapeRegExp(t);
+    return /^[a-z0-9+#._/\s-]+$/i.test(t) ? `(?<![A-Za-z0-9])${esc}(?![A-Za-z0-9])` : esc;
+  });
+
+  if (patternParts.length === 0) return [{ text: cleanedJd }];
+
+  const combinedRe = new RegExp(`(${patternParts.join('|')})`, 'gi');
+  const segments: Array<{ text: string; detail?: LocalJdKeywordDetail }> = [];
+  let lastIndex = 0;
+
+  for (const match of cleanedJd.matchAll(combinedRe)) {
+    const idx = match.index ?? 0;
+    if (idx > lastIndex) {
+      segments.push({ text: cleanedJd.slice(lastIndex, idx) });
+    }
+    const hitText = match[0];
+    const hitDetail = termToDetail.get(hitText.toLowerCase());
+    segments.push({ text: hitText, detail: hitDetail });
+    lastIndex = idx + hitText.length;
+  }
+
+  if (lastIndex < cleanedJd.length) {
+    segments.push({ text: cleanedJd.slice(lastIndex) });
+  }
+
+  return segments;
+}
+
+export const JD_SEMANTIC_SCORE_SYSTEM_PROMPT =
+  '你是一位资深技术面试官与招聘总监。请跳过死板的字面关键词比对，对目标岗位 JD 与候选人简历中的真实工作/项目经历进行深层语义分析，逐项评估提取出的硬性技能与简历经历的相关性并打分（0-100 分）。75-100 分（strong）表示经历中有深度实战、量化成果或等价上位可迁移能力；40-74 分（partial）表示仅在技能栏提及或经历中浅层体现；0-39 分（missing）表示简历未体现。每项必须基于简历事实给出具体依据（evidence），严禁编造经历，并对薄弱或缺失项提供可落地的补强建议（gapAdvice）。';
+
+/**
+ * Compute deterministic weighted overall score (0-100) from individual semantic skill scores.
+ * Weights: core = 3, standard = 2, bonus = 1.
+ */
+export function computeWeightedSemanticScore(skillScores: JdSemanticSkillScore[]): number {
+  if (!skillScores.length) return 0;
+  let totalWeight = 0;
+  let weightedSum = 0;
+  for (const item of skillScores) {
+    const w = item.tier === 'core' ? 3 : item.tier === 'bonus' ? 1 : 2;
+    const clamped = Math.max(0, Math.min(100, Number(item.relevanceScore) || 0));
+    totalWeight += w;
+    weightedSum += clamped * w;
+  }
+  return totalWeight > 0 ? Math.round(weightedSum / totalWeight) : 0;
+}
+
+/**
+ * Build a complete copy-pasteable prompt for external LLM semantic relevance scoring.
+ */
+export function buildJdSemanticScoringPrompt(
+  doc: ResumeDoc,
+  jdText: string,
+  skills: JdStructuredSkillItem[] = [],
+): string {
+  const { cleaned } = preprocessJdText(jdText || '');
+  const resolvedSkills =
+    skills.length > 0 ? skills : extractLocalJdSkills(jdText).skills;
+  const skillLines =
+    resolvedSkills.length > 0
+      ? resolvedSkills
+          .map((s, idx) => {
+            const tierLabel =
+              s.tier === 'core' ? '核心/精通' : s.tier === 'bonus' ? '加分/了解' : '常规/熟悉';
+            const catLabel = s.category ? `/${s.category}` : '';
+            return `${idx + 1}. ${s.keyword}（${tierLabel}${catLabel}）`;
+          })
+          .join('\n')
+      : '（请直接从 JD 中提取硬性技能并逐项打分）';
+
+  const parts = [
+    JD_SEMANTIC_SCORE_SYSTEM_PROMPT,
+    doc.data.intent.position ? `【目标岗位方向】${doc.data.intent.position}` : '',
+    `【目标岗位 JD】\n${(cleaned || jdText || '').trim()}`,
+    `【待语义打分的硬性技能项】\n${skillLines}`,
+    `【候选人简历全文（重点结合工作/项目经历与成果进行语义评估）】\n${formatPlainText(doc)}`,
+    `【输出格式要求（请仅输出严格合法 JSON，可直接粘贴回简历工坊渲染语义相关性打分卡片）】
+\`\`\`json
+{
+  "overallScore": 78,
+  "roleAlignment": "一句话概括岗位背景契合度与核心短板",
+  "summary": "一句话综合语义匹配结论",
+  "skillScores": [
+    {
+      "keyword": "Python",
+      "tier": "core",
+      "category": "后端与数据",
+      "relevanceScore": 92,
+      "status": "strong",
+      "evidence": "在星云智选经历中用 Python(Pandas) 搭建自动化流水线，周报耗时缩短 85%",
+      "gapAdvice": ""
+    }
+  ]
+}
+\`\`\``,
+  ].filter(Boolean);
+  return parts.join('\n\n');
+}
+
+function deriveSemanticStatus(score: number, rawStatus?: unknown): JdSemanticStatus {
+  if (score >= 75) return 'strong';
+  if (score >= 40) return 'partial';
+  if (score < 40) return 'missing';
+  const s = String(rawStatus || '').toLowerCase().trim();
+  if (s === 'strong' || s === 'partial' || s === 'missing') return s;
+  return 'missing';
+}
+
+/**
+ * Validate and normalize raw LLM JSON output into a deterministic JdSemanticMatchReport.
+ */
+export function normalizeJdSemanticMatchReport(
+  raw: unknown,
+  skills: JdStructuredSkillItem[] = [],
+  meta?: {
+    source?: 'api' | 'external-json';
+    usedModel?: string;
+    usedProvider?: string;
+  },
+): JdSemanticMatchReport {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('语义打分结果必须是合法 JSON 对象（包含 skillScores 数组）。');
+  }
+  const obj = raw as Record<string, unknown>;
+  const rawList = Array.isArray(obj.skillScores)
+    ? obj.skillScores
+    : Array.isArray(obj.skills)
+      ? obj.skills
+      : Array.isArray(obj.items)
+        ? obj.items
+        : [];
+
+  if (rawList.length === 0) {
+    throw new Error('语义打分 JSON 中未找到有效的 skillScores 评分列表。');
+  }
+
+  const skillMetaMap = new Map<string, JdStructuredSkillItem>();
+  for (const s of skills) {
+    const key = (normalizeJdKeyword(s.keyword)?.key || s.keyword.toLowerCase()).trim();
+    if (key && !skillMetaMap.has(key)) skillMetaMap.set(key, s);
+  }
+
+  const seen = new Set<string>();
+  const skillScores: JdSemanticSkillScore[] = [];
+
+  for (const entry of rawList) {
+    if (!entry || typeof entry !== 'object') continue;
+    const rec = entry as Record<string, unknown>;
+    const rawKw = String(rec.keyword ?? rec.skill ?? rec.name ?? '').trim();
+    if (!rawKw) continue;
+    const norm = normalizeJdKeyword(rawKw);
+    const lookupKey = norm?.key || rawKw.toLowerCase();
+    if (seen.has(lookupKey)) continue;
+    seen.add(lookupKey);
+
+    const matchedInput = skillMetaMap.get(lookupKey);
+    const rawScore = Number(rec.relevanceScore ?? rec.score ?? rec.matchScore ?? 0);
+    const relevanceScore = Number.isFinite(rawScore)
+      ? Math.max(0, Math.min(100, Math.round(rawScore)))
+      : 0;
+    const explicitTierRaw = rec.tier ?? rec.level ?? rec.priority;
+    const hasExplicitTier =
+      typeof explicitTierRaw === 'string' && explicitTierRaw.trim().length > 0;
+    const tier: JdKeywordTier = hasExplicitTier
+      ? inferTierFromLabel(explicitTierRaw, String(rec.category || ''))
+      : matchedInput?.tier || inferTierFromLabel(undefined, String(rec.category || ''));
+    const category =
+      (typeof rec.category === 'string' && rec.category.trim()) || matchedInput?.category || undefined;
+    const status = deriveSemanticStatus(relevanceScore, rec.status);
+    const evidence =
+      typeof rec.evidence === 'string' && rec.evidence.trim()
+        ? rec.evidence.trim()
+        : status === 'missing'
+          ? '简历经历与技能栏暂未体现该项能力'
+          : '简历中存在相关背景支撑';
+    const gapAdvice =
+      typeof rec.gapAdvice === 'string' && rec.gapAdvice.trim()
+        ? rec.gapAdvice.trim()
+        : typeof rec.advice === 'string' && rec.advice.trim()
+          ? rec.advice.trim()
+          : undefined;
+
+    skillScores.push({
+      keyword: matchedInput?.keyword || norm?.canonical || rawKw,
+      tier,
+      category,
+      relevanceScore,
+      status,
+      evidence,
+      gapAdvice: status === 'strong' ? undefined : gapAdvice,
+    });
+  }
+
+  // Ensure every curated input skill is represented even if the LLM omitted one
+  for (const inputSkill of skills) {
+    const key = normalizeJdKeyword(inputSkill.keyword)?.key || inputSkill.keyword.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      skillScores.push({
+        keyword: inputSkill.keyword,
+        tier: inputSkill.tier,
+        category: inputSkill.category,
+        relevanceScore: 0,
+        status: 'missing',
+        evidence: '简历经历中未检测到明确语义关联',
+        gapAdvice: '如实际具备该技能，建议补充具体项目案例与结果',
+      });
+    }
+  }
+
+  // Sort by tier priority (core > standard > bonus), then relevanceScore descending
+  const tierOrder = (t: JdKeywordTier) => (t === 'core' ? 3 : t === 'standard' ? 2 : 1);
+  skillScores.sort((a, b) => {
+    if (tierOrder(b.tier) !== tierOrder(a.tier)) return tierOrder(b.tier) - tierOrder(a.tier);
+    return b.relevanceScore - a.relevanceScore;
+  });
+
+  const computedOverall = computeWeightedSemanticScore(skillScores);
+  const rawOverall = Number(obj.overallScore ?? obj.score);
+  const overallScore =
+    Number.isFinite(rawOverall) && rawOverall >= 0 && rawOverall <= 100 && Math.abs(rawOverall - computedOverall) <= 15
+      ? Math.round(rawOverall)
+      : computedOverall;
+
+  const summary =
+    typeof obj.summary === 'string' && obj.summary.trim()
+      ? obj.summary.trim()
+      : `已完成 ${skillScores.length} 项硬性技能的简历经历语义相关性评估，加权匹配度 ${overallScore}%。`;
+  const roleAlignment =
+    typeof obj.roleAlignment === 'string' && obj.roleAlignment.trim()
+      ? obj.roleAlignment.trim()
+      : undefined;
+
+  return {
+    overallScore,
+    summary,
+    roleAlignment,
+    skillScores,
+    usedModel: meta?.usedModel,
+    usedProvider: meta?.usedProvider,
+    source: meta?.source || 'api',
+  };
+}
+
+/**
+ * Parse external LLM semantic relevance scoring JSON (supports <think> traces & markdown code fences).
+ */
+export function parseExternalJdSemanticJson(
+  rawText: string,
+  skills: JdStructuredSkillItem[] = [],
+): JdSemanticMatchReport {
+  const stripped = (rawText || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  if (!stripped) {
+    throw new Error('请先粘贴大模型返回的语义打分 JSON。');
+  }
+  const fenced = stripped.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  let candidate = fenced && fenced[1] ? fenced[1].trim() : stripped;
+  const firstBrace = candidate.indexOf('{');
+  const lastBrace = candidate.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    candidate = candidate.slice(firstBrace, lastBrace + 1);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidate);
+  } catch {
+    throw new Error('无法解析为合法 JSON，请检查是否完整复制（需以 { 开头、} 结尾）。');
+  }
+  return normalizeJdSemanticMatchReport(parsed, skills, { source: 'external-json' });
+}
+
+export interface ScoreJdSemanticRelevanceParams {
+  doc: ResumeDoc;
+  jdText: string;
+  skills?: JdStructuredSkillItem[];
+  customConfig?: CustomAiConfig;
+  selectedProvider?: AiProviderId;
+  endpoint?: string;
+  fetcher?: typeof fetch;
+}
+
+/**
+ * Use an LLM to semantically analyze the JD against the user's resume experiences & skills,
+ * scoring each extracted hard-skill requirement (0-100) with concrete experience evidence and gap advice,
+ * replacing simple literal text matching.
+ */
+export async function scoreJdSemanticRelevanceWithLlm(
+  params: ScoreJdSemanticRelevanceParams,
+): Promise<JdSemanticMatchReport> {
+  const {
+    doc,
+    jdText,
+    skills,
+    customConfig,
+    selectedProvider = 'auto',
+    endpoint = '/api/ai/semantic-match',
+    fetcher = fetch,
+  } = params;
+
+  const { cleaned: cleanedJd } = preprocessJdText(jdText || '');
+  if (cleanedJd.length < 8) {
+    throw new Error('请先粘贴目标岗位 JD 原文（至少 8 个字）再执行语义相关性打分。');
+  }
+
+  const resumeText = formatPlainText(doc);
+  if (resumeText.trim().length < 20) {
+    throw new Error('当前简历内容过短，请先完善工作经历或技能后再执行语义相关性打分。');
+  }
+
+  const resolvedSkills =
+    skills && skills.length > 0 ? skills : extractLocalJdSkills(cleanedJd).skills;
+
+  const aiDefaults = customConfig
+    ? buildAiRequestDefaults(customConfig, selectedProvider)
+    : { provider: selectedProvider };
+
+  const response = await fetcher(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...aiDefaults,
+      jdText: cleanedJd,
+      skills: resolvedSkills.map((s) => ({
+        keyword: s.keyword,
+        tier: s.tier,
+        category: s.category,
+      })),
+      resumeText,
+      roleHint: doc.data.intent.position || doc.name,
+    }),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as {
+    report?: unknown;
+    error?: string;
+    meta?: { provider?: string; model?: string };
+  };
+
+  if (!response.ok) {
+    throw new Error(payload.error || `LLM 语义打分请求失败 (${response.status})`);
+  }
+
+  return normalizeJdSemanticMatchReport(payload.report, resolvedSkills, {
+    source: 'api',
+    usedModel: payload.meta?.model,
+    usedProvider: payload.meta?.provider,
+  });
 }
 
 export interface QuantificationCheckResult {

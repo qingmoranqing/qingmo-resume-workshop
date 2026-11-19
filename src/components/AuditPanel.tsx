@@ -4,17 +4,22 @@ import {
   AlertTriangle,
   ArrowUpRight,
   BookmarkPlus,
+  BrainCircuit,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   ClipboardCopy,
   FileJson2,
+  Highlighter,
   Info,
   Loader2,
+  Plus,
+  RotateCcw,
   ScanSearch,
   Sparkles,
   Trash2,
   Wand2,
+  X,
 } from 'lucide-react';
 import { BUILTIN_AUDIT_PROMPTS, FIXED_MODULE_LABELS } from '../data/themes';
 import type {
@@ -24,17 +29,33 @@ import type {
   AiProviderInfo,
   AuditPromptPreset,
   CustomAiConfig,
+  JdKeywordTier,
+  JdScanEngine,
+  JdSemanticMatchReport,
+  JdStructuredExtractResult,
+  JdStructuredSkillItem,
   LocalCheckItem,
+  LocalJdKeywordDetail,
   ResumeDoc,
 } from '../types/resume';
 import {
-  analyzeJdMatchLocal,
   assembleAuditPrompt,
   buildAiRequestDefaults,
+  buildJdExtractPrompt,
+  buildJdSemanticScoringPrompt,
+  computeWeightedSemanticScore,
+  evaluateJdSkillsAgainstResume,
+  extractLocalJdSkills,
+  flattenStructuredJdSkills,
   formatPlainText,
+  highlightJdSegments,
   isCustomAiReady,
   nid,
+  normalizeStructuredJdExtract,
   parseExternalAuditJson,
+  parseExternalJdExtractJson,
+  parseExternalJdSemanticJson,
+  scoreJdSemanticRelevanceWithLlm,
 } from '../utils/resumeLogic';
 import { AiProviderSelector } from './AiProviderSelector';
 
@@ -109,8 +130,282 @@ export function AuditPanel({
 
   const allPresets = [...BUILTIN_AUDIT_PROMPTS, ...customPrompts];
 
-  // Pure offline local JD keyword gap scan (zero API needed)
-  const localJdMatch = useMemo(() => analyzeJdMatchLocal(doc, targetJd), [doc, targetJd]);
+  // Dual-engine JD Scanner state (Local Offline vs LLM Enhanced + Human-in-the-loop edits)
+  const [jdEngine, setJdEngine] = useState<JdScanEngine>('local');
+  const [removedJdKeys, setRemovedJdKeys] = useState<string[]>([]);
+  const [manualJdSkills, setManualJdSkills] = useState<JdStructuredSkillItem[]>([]);
+  const [manualKwInput, setManualKwInput] = useState('');
+  const [manualKwTier, setManualKwTier] = useState<JdKeywordTier>('core');
+  const [showJdHighlight, setShowJdHighlight] = useState(false);
+
+  const [llmExtracted, setLlmExtracted] = useState<JdStructuredExtractResult | null>(null);
+  const [llmExtractLoading, setLlmExtractLoading] = useState(false);
+  const [llmExtractError, setLlmExtractError] = useState<string | null>(null);
+  const [llmExtractMeta, setLlmExtractMeta] = useState<string | null>(null);
+  const [semanticReport, setSemanticReport] = useState<JdSemanticMatchReport | null>(null);
+  const [semanticLoading, setSemanticLoading] = useState(false);
+  const [showLlmPasteJson, setShowLlmPasteJson] = useState(false);
+  const [externalJdJson, setExternalJdJson] = useState('');
+  const [externalJdJsonError, setExternalJdJsonError] = useState<string | null>(null);
+
+  // Step 1: Extract base JD skills from local offline engine
+  const localExtracted = useMemo(() => extractLocalJdSkills(targetJd), [targetJd]);
+
+  // Step 2: Merge active engine's skills with user manual additions & [x] removals, then score live
+  const activeJdSkills = useMemo(() => {
+    const baseSkills: JdStructuredSkillItem[] =
+      jdEngine === 'llm' && llmExtracted
+        ? flattenStructuredJdSkills(llmExtracted)
+        : localExtracted.skills;
+    const removedSet = new Set(removedJdKeys.map((k) => k.toLowerCase()));
+    const filteredBase = baseSkills.filter((item) => !removedSet.has(item.keyword.toLowerCase()));
+    const filteredManual = manualJdSkills.filter(
+      (item) => !removedSet.has(item.keyword.toLowerCase()),
+    );
+    return [...filteredBase, ...filteredManual];
+  }, [jdEngine, llmExtracted, localExtracted.skills, removedJdKeys, manualJdSkills]);
+
+  const jdMatch = useMemo(
+    () =>
+      evaluateJdSkillsAgainstResume(doc, activeJdSkills, {
+        cleanedJd: localExtracted.cleanedJd,
+        noiseRemovedCount: localExtracted.noiseRemovedCount,
+      }),
+    [doc, activeJdSkills, localExtracted.cleanedJd, localExtracted.noiseRemovedCount],
+  );
+
+  const allJdDetails = useMemo(
+    () => [...(jdMatch.matchedDetails || []), ...(jdMatch.missingDetails || [])],
+    [jdMatch.matchedDetails, jdMatch.missingDetails],
+  );
+
+  const groupedLlmCategories = useMemo(() => {
+    if (jdEngine !== 'llm' || !llmExtracted) return [];
+    const map = new Map<string, LocalJdKeywordDetail[]>();
+    for (const d of allJdDetails) {
+      const cat = d.category || (d.source === 'manual' ? '手动补充' : '其他要求');
+      const arr = map.get(cat) || [];
+      arr.push(d);
+      map.set(cat, arr);
+    }
+    return Array.from(map.entries()).map(([name, items]) => ({ name, items }));
+  }, [jdEngine, llmExtracted, allJdDetails]);
+
+  const highlightedJdSegments = useMemo(
+    () => (showJdHighlight ? highlightJdSegments(localExtracted.cleanedJd, allJdDetails) : []),
+    [showJdHighlight, localExtracted.cleanedJd, allJdDetails],
+  );
+
+  // Live-filtered LLM semantic relevance report (recalculates weighted score when user clicks [x])
+  const visibleSemanticReport = useMemo<JdSemanticMatchReport | null>(() => {
+    if (!semanticReport) return null;
+    const removedSet = new Set(removedJdKeys.map((k) => k.toLowerCase()));
+    const filteredScores = semanticReport.skillScores.filter(
+      (item) => !removedSet.has(item.keyword.toLowerCase()),
+    );
+    const overallScore =
+      filteredScores.length === semanticReport.skillScores.length
+        ? semanticReport.overallScore
+        : computeWeightedSemanticScore(filteredScores);
+    return {
+      ...semanticReport,
+      skillScores: filteredScores,
+      overallScore,
+    };
+  }, [semanticReport, removedJdKeys]);
+
+  const handleRemoveJdKeyword = (keyword: string) => {
+    const key = keyword.toLowerCase();
+    setRemovedJdKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+    setManualJdSkills((prev) => prev.filter((item) => item.keyword.toLowerCase() !== key));
+  };
+
+  const handleAddManualJdKeyword = () => {
+    const raw = manualKwInput.trim();
+    if (!raw) return;
+    const parts = raw
+      .split(/[,，、;；]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length === 0) return;
+
+    const addedKeys = new Set(parts.map((p) => p.toLowerCase()));
+    setRemovedJdKeys((prev) => prev.filter((k) => !addedKeys.has(k)));
+    setManualJdSkills((prev) => {
+      const next = [...prev];
+      for (const kw of parts) {
+        const existsIdx = next.findIndex((x) => x.keyword.toLowerCase() === kw.toLowerCase());
+        const entry: JdStructuredSkillItem = {
+          keyword: kw,
+          tier: manualKwTier,
+          category: jdEngine === 'llm' ? '手动补充' : undefined,
+          source: 'manual',
+          surfaceTerms: [kw],
+        };
+        if (existsIdx >= 0) {
+          next[existsIdx] = entry;
+        } else {
+          next.push(entry);
+        }
+      }
+      return next;
+    });
+    setManualKwInput('');
+  };
+
+  const handleResetManualJdEdits = () => {
+    setRemovedJdKeys([]);
+    setManualJdSkills([]);
+    onNotify('已恢复当前引擎提取的默认关键词列表');
+  };
+
+  const handleCopyJdExtractPrompt = async () => {
+    if (!targetJd.trim()) {
+      onNotify('请先在上方粘贴目标岗位 JD 原文');
+      return;
+    }
+    const prompt = buildJdExtractPrompt(targetJd, doc.data.intent.position || doc.name);
+    try {
+      await navigator.clipboard.writeText(prompt);
+      onNotify('已复制 JD 结构化提取 Prompt，可发给任意大模型后把 JSON 贴回');
+    } catch {
+      onNotify('复制失败，请检查剪贴板权限');
+    }
+  };
+
+  const handleCopyJdSemanticPrompt = async () => {
+    if (targetJd.trim().length < 8) {
+      onNotify('请先在上方粘贴目标岗位 JD 原文（至少 8 个字）');
+      return;
+    }
+    const prompt = buildJdSemanticScoringPrompt(doc, targetJd, activeJdSkills);
+    try {
+      await navigator.clipboard.writeText(prompt);
+      onNotify('已复制 LLM 语义相关性打分 Prompt，可发给任意大模型后把 JSON 贴回');
+    } catch {
+      onNotify('复制失败，请检查剪贴板权限');
+    }
+  };
+
+  const handleImportExternalJdJson = () => {
+    if (!externalJdJson.trim()) {
+      setExternalJdJsonError('请先粘贴大模型返回的结构化提取或语义打分 JSON。');
+      return;
+    }
+    // Auto-detect semantic relevance scoring JSON (contains skillScores / relevanceScore)
+    const strippedPreview = externalJdJson.replace(/<think>[\s\S]*?<\/think>/gi, '');
+    const looksLikeSemantic =
+      /"skillScores"\s*:/.test(strippedPreview) || /"relevanceScore"\s*:/.test(strippedPreview);
+
+    if (looksLikeSemantic) {
+      try {
+        const parsedSemantic = parseExternalJdSemanticJson(
+          externalJdJson,
+          llmExtracted ? activeJdSkills : [],
+        );
+        setSemanticReport(parsedSemantic);
+        setLlmExtractError(null);
+        setExternalJdJsonError(null);
+        setExternalJdJson('');
+        setShowLlmPasteJson(false);
+        setRemovedJdKeys([]);
+        onNotify(
+          `已导入 ${parsedSemantic.skillScores.length} 项技能语义相关性打分（综合 ${parsedSemantic.overallScore}%）`,
+        );
+        return;
+      } catch (err: unknown) {
+        setExternalJdJsonError(err instanceof Error ? err.message : '语义打分 JSON 解析失败');
+        return;
+      }
+    }
+
+    try {
+      const parsed = parseExternalJdExtractJson(externalJdJson);
+      setLlmExtracted(parsed);
+      setLlmExtractMeta('外部 AI 导入');
+      setLlmExtractError(null);
+      setExternalJdJsonError(null);
+      setExternalJdJson('');
+      setShowLlmPasteJson(false);
+      setRemovedJdKeys([]);
+      onNotify(`已导入 ${parsed.categories.length} 个分类的硬性技能词并完成匹配`);
+    } catch (err: unknown) {
+      setExternalJdJsonError(err instanceof Error ? err.message : 'JSON 解析失败');
+    }
+  };
+
+  const handleRunLlmJdExtract = async () => {
+    if (targetJd.trim().length < 8) {
+      setLlmExtractError('请先粘贴目标岗位 JD 原文（至少 8 个字）再提取。');
+      return;
+    }
+    if (!anyAiReady) {
+      setShowLlmPasteJson(true);
+      setLlmExtractError('尚未配置直连 AI Key：可在右上角「设置」填入 API，或点「复制提取 Prompt」免费配合外部大模型后粘贴 JSON。');
+      return;
+    }
+    setLlmExtractLoading(true);
+    setLlmExtractError(null);
+    try {
+      const res = await fetch('/api/ai/extract-jd', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...buildAiRequestDefaults(customConfig, selectedProvider),
+          jdText: targetJd,
+          roleHint: doc.data.intent.position || doc.name,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setLlmExtractError(data.error || `提取失败 (${res.status})`);
+        return;
+      }
+      const normalized = normalizeStructuredJdExtract(data.extracted);
+      setLlmExtracted(normalized);
+      setLlmExtractMeta(data.meta?.model ? String(data.meta.model) : 'LLM');
+      setRemovedJdKeys([]);
+      onNotify(`LLM 结构化提取完成（${normalized.categories.length} 个分类）`);
+    } catch (err: unknown) {
+      setLlmExtractError(err instanceof Error ? `网络异常：${err.message}` : '网络请求失败');
+    } finally {
+      setLlmExtractLoading(false);
+    }
+  };
+
+  const handleRunLlmSemanticScore = async () => {
+    if (targetJd.trim().length < 8) {
+      setLlmExtractError('请先粘贴目标岗位 JD 原文（至少 8 个字）再执行语义相关性打分。');
+      return;
+    }
+    if (!anyAiReady) {
+      setShowLlmPasteJson(true);
+      setLlmExtractError(
+        '尚未配置直连 AI Key：可在右上角「设置」填入 API，或点「复制打分 Prompt」免费配合外部大模型后点击「粘贴 JSON」导入语义评分。',
+      );
+      return;
+    }
+    setSemanticLoading(true);
+    setLlmExtractError(null);
+    try {
+      const reportResult = await scoreJdSemanticRelevanceWithLlm({
+        doc,
+        jdText: targetJd,
+        skills: activeJdSkills,
+        customConfig,
+        selectedProvider,
+      });
+      setSemanticReport(reportResult);
+      setRemovedJdKeys([]);
+      onNotify(
+        `LLM 语义相关性打分完成（综合 ${reportResult.overallScore}% · ${reportResult.skillScores.length} 项硬性技能）`,
+      );
+    } catch (err: unknown) {
+      setLlmExtractError(err instanceof Error ? err.message : '语义相关性打分失败');
+    } finally {
+      setSemanticLoading(false);
+    }
+  };
 
   useEffect(() => {
     try {
@@ -251,83 +546,720 @@ export function AuditPanel({
       {/* Engine 1: Local Instant Rule Checks + Pure Offline JD Keyword Gap Scanner */}
       {subView === 'local' && (
         <div className="space-y-4">
-          {/* Pure Offline JD Keyword Scanner */}
+          {/* Dual-Engine JD Keyword Gap Scanner (Local Offline + LLM Enhanced + Human-in-the-Loop) */}
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-900">
-                <ScanSearch className="h-3.5 w-3.5 text-blue-600" />
-                离线 JD 关键词缺口扫描（免 API / 实时算分）
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-900 whitespace-nowrap">
+                  <ScanSearch className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                  <span>双引擎 JD 扫描</span>
+                </div>
+                {jdEngine === 'llm' && visibleSemanticReport ? (
+                  <span
+                    data-testid="jd-match-score"
+                    className={`font-mono text-xs font-bold tabular-nums whitespace-nowrap ${
+                      visibleSemanticReport.overallScore >= 75
+                        ? 'text-emerald-700'
+                        : visibleSemanticReport.overallScore >= 40
+                          ? 'text-amber-700'
+                          : 'text-red-700'
+                    }`}
+                  >
+                    语义匹配 {visibleSemanticReport.overallScore}%
+                  </span>
+                ) : (
+                  jdMatch.totalKeywords > 0 && (
+                    <span
+                      data-testid="jd-match-score"
+                      className={`font-mono text-xs font-bold tabular-nums whitespace-nowrap ${
+                        jdMatch.scorePct >= 70
+                          ? 'text-emerald-700'
+                          : jdMatch.scorePct >= 40
+                            ? 'text-amber-700'
+                            : 'text-red-700'
+                      }`}
+                    >
+                      命中 {jdMatch.scorePct}%
+                    </span>
+                  )
+                )}
               </div>
-              {localJdMatch.totalKeywords > 0 && (
-                <span
-                  className={`font-mono text-xs font-bold tabular-nums ${
-                    localJdMatch.scorePct >= 70
-                      ? 'text-emerald-700'
-                      : localJdMatch.scorePct >= 40
-                        ? 'text-amber-700'
-                        : 'text-red-700'
+              <div
+                role="group"
+                aria-label="JD 提取引擎切换"
+                className="inline-flex shrink-0 rounded-md border border-slate-200 bg-white p-0.5 text-[10.5px]"
+              >
+                <button
+                  type="button"
+                  onClick={() => setJdEngine('local')}
+                  className={`rounded px-1.5 py-0.5 font-medium whitespace-nowrap transition-colors ${
+                    jdEngine === 'local'
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  命中 {localJdMatch.scorePct}%
-                </span>
-              )}
+                  本地离线
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setJdEngine('llm')}
+                  className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-medium whitespace-nowrap transition-colors ${
+                    jdEngine === 'llm'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Sparkles className="h-2.5 w-2.5 shrink-0" />
+                  LLM 增强
+                </button>
+              </div>
             </div>
+
             <textarea
               aria-label="离线扫描目标岗位 JD"
               rows={3}
               value={targetJd}
-              onChange={(e) => setTargetJd(e.target.value)}
-              placeholder="粘贴招聘 JD 原文（如：熟悉西门子 S7-1500、EPLAN、PROFINET...），无需联网或 AI 立即标出简历已覆盖与缺失关键词..."
+              onChange={(e) => {
+                setTargetJd(e.target.value);
+                setLlmExtractError(null);
+              }}
+              placeholder={
+                jdEngine === 'llm'
+                  ? '粘贴目标岗位 JD 原文，点击下方「AI 结构化提取」或「复制提取 Prompt」让大模型按分类/层级拆分硬性要求并忽略软性套话...'
+                  : '粘贴招聘 JD 原文（支持含乱码、HTML、Markdown 或模糊描述），本地实时清洗并按权重+同义词+模糊语义算分...'
+              }
               className="w-full rounded-lg border border-slate-200 bg-white p-2 text-xs leading-relaxed text-slate-800 focus:border-blue-600 focus:outline-none"
             />
-            {localJdMatch.totalKeywords > 0 && (
-              <div className="space-y-2 pt-0.5">
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      localJdMatch.scorePct >= 70
-                        ? 'bg-emerald-600'
-                        : localJdMatch.scorePct >= 40
-                          ? 'bg-amber-500'
-                          : 'bg-red-500'
+
+            {/* LLM Enhanced Engine Action Bar */}
+            {jdEngine === 'llm' && (
+              <div className="space-y-2 rounded-lg border border-blue-100 bg-blue-50/50 p-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={semanticLoading || llmExtractLoading}
+                    onClick={handleRunLlmSemanticScore}
+                    className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                  >
+                    {semanticLoading ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <BrainCircuit className="h-3 w-3" />
+                    )}
+                    {semanticLoading ? '语义打分中...' : '语义相关性打分'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={llmExtractLoading || semanticLoading}
+                    onClick={handleRunLlmJdExtract}
+                    className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-white px-2 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-60"
+                  >
+                    {llmExtractLoading ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-3 w-3" />
+                    )}
+                    {llmExtractLoading ? '提取中...' : 'AI 结构化提取'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopyJdSemanticPrompt}
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <ClipboardCopy className="h-3 w-3" />
+                    复制打分 Prompt
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopyJdExtractPrompt}
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <ClipboardCopy className="h-3 w-3" />
+                    复制提取 Prompt
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLlmPasteJson((v) => !v);
+                      setExternalJdJsonError(null);
+                    }}
+                    className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium ${
+                      showLlmPasteJson
+                        ? 'border-blue-300 bg-blue-100/70 text-blue-800'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                     }`}
-                    style={{ width: `${localJdMatch.scorePct}%` }}
-                  />
+                  >
+                    <FileJson2 className="h-3 w-3" />
+                    粘贴 JSON
+                  </button>
+                  {(llmExtracted || semanticReport) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLlmExtracted(null);
+                        setLlmExtractMeta(null);
+                        setSemanticReport(null);
+                      }}
+                      className="ml-auto text-[10.5px] text-slate-500 hover:text-slate-800"
+                    >
+                      清空 AI 结果
+                    </button>
+                  )}
                 </div>
-                {localJdMatch.matched.length > 0 && (
-                  <div>
-                    <div className="text-[10.5px] font-medium text-emerald-700 mb-1">
-                      简历已命中（{localJdMatch.matched.length}）
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {localJdMatch.matched.map((kw) => (
-                        <span
-                          key={kw}
-                          className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10.5px] text-emerald-800"
+
+                {llmExtractError && (
+                  <div className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                    <div className="space-y-1">
+                      <p>{llmExtractError}</p>
+                      {!anyAiReady && (
+                        <button
+                          type="button"
+                          onClick={onOpenSettings}
+                          className="font-medium text-blue-700 underline hover:text-blue-800"
                         >
-                          {kw}
-                        </span>
-                      ))}
+                          前往设置配置 API Key
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
-                {localJdMatch.missing.length > 0 && (
-                  <div>
-                    <div className="text-[10.5px] font-medium text-amber-700 mb-1">
-                      JD 提及但简历未出现（{localJdMatch.missing.length} · 如真实掌握建议补入技能或经历）
+
+                {showLlmPasteJson && (
+                  <div className="space-y-1.5 rounded-md border border-blue-200 bg-white p-2">
+                    <div className="text-[10.5px] text-slate-600">
+                      自动识别粘贴内容：支持 <code className="rounded bg-slate-100 px-1">skillScores</code>（语义相关性打分）与 <code className="rounded bg-slate-100 px-1">categories</code>（硬性技能分类提取）两种 JSON：
                     </div>
-                    <div className="flex flex-wrap gap-1">
-                      {localJdMatch.missing.map((kw) => (
-                        <span
-                          key={kw}
-                          className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10.5px] text-amber-800"
-                        >
-                          {kw}
-                        </span>
-                      ))}
+                    <textarea
+                      aria-label="粘贴 LLM 结构化 JD JSON"
+                      rows={3}
+                      value={externalJdJson}
+                      onChange={(e) => setExternalJdJson(e.target.value)}
+                      placeholder='{"overallScore":82,"summary":"数据建模经验契合","skillScores":[{"keyword":"Python","tier":"core","relevanceScore":92,"status":"strong","evidence":"用 Python 搭建自动化流水线"}]}'
+                      className="w-full rounded border border-slate-200 bg-slate-50 p-1.5 font-mono text-[10.5px] text-slate-800 focus:border-blue-600 focus:bg-white focus:outline-none"
+                    />
+                    {externalJdJsonError && (
+                      <div className="text-[10.5px] text-red-600">{externalJdJsonError}</div>
+                    )}
+                    <div className="flex justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowLlmPasteJson(false)}
+                        className="rounded px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-100"
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleImportExternalJdJson}
+                        className="rounded bg-slate-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-800"
+                      >
+                        解析并匹配
+                      </button>
                     </div>
                   </div>
                 )}
+
+                {visibleSemanticReport ? (
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[10.5px] text-blue-800">
+                    <span className="font-medium">
+                      LLM 语义相关性打分已生效
+                      {visibleSemanticReport.usedModel
+                        ? `（${visibleSemanticReport.usedModel}）`
+                        : visibleSemanticReport.source === 'external-json'
+                          ? '（外部 AI 导入）'
+                          : ''}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSemanticReport(null)}
+                      className="text-[10.5px] text-blue-700 underline hover:text-blue-900"
+                    >
+                      切回词面匹配
+                    </button>
+                  </div>
+                ) : llmExtracted ? (
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] text-blue-800">
+                    <span className="font-medium">
+                      LLM 结构化模式已生效{llmExtractMeta ? `（${llmExtractMeta}）` : ''}
+                    </span>
+                    {llmExtracted.ignoredSoftSkills && llmExtracted.ignoredSoftSkills.length > 0 && (
+                      <span className="text-slate-500">
+                        · 已忽略软性词：{llmExtracted.ignoredSoftSkills.slice(0, 5).join('、')}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-[10.5px] text-slate-500">
+                    点击「语义相关性打分」结合工作经历深度评分（替代字面比对），或点击「复制打分 Prompt」+「粘贴 JSON」零成本配合外部大模型使用。
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Match Score Bar + Highlight Toggle + Interactive Keyword Chips */}
+            {(jdMatch.totalKeywords > 0 ||
+              visibleSemanticReport !== null ||
+              removedJdKeys.length > 0 ||
+              targetJd.trim().length > 0) && (
+              <div className="space-y-2 pt-0.5" data-testid="offline-jd-match-result">
+                {(jdEngine === 'llm' && visibleSemanticReport
+                  ? visibleSemanticReport.skillScores.length > 0
+                  : jdMatch.totalKeywords > 0) && (
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        (jdEngine === 'llm' && visibleSemanticReport
+                          ? visibleSemanticReport.overallScore
+                          : jdMatch.scorePct) >= 70
+                          ? 'bg-emerald-600'
+                          : (jdEngine === 'llm' && visibleSemanticReport
+                                ? visibleSemanticReport.overallScore
+                                : jdMatch.scorePct) >= 40
+                            ? 'bg-amber-500'
+                            : 'bg-red-500'
+                      }`}
+                      style={{
+                        width: `${
+                          jdEngine === 'llm' && visibleSemanticReport
+                            ? visibleSemanticReport.overallScore
+                            : jdMatch.scorePct
+                        }%`,
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-1.5 text-[10px] text-slate-500">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    {(jdMatch.noiseRemovedCount || 0) > 0 && (
+                      <span>已清洗 {jdMatch.noiseRemovedCount} 处噪点</span>
+                    )}
+                    {(jdMatch.synonymMatchedCount || 0) > 0 && (
+                      <span className="text-emerald-700">
+                        同义命中 {jdMatch.synonymMatchedCount} 项
+                      </span>
+                    )}
+                    {(jdMatch.fuzzyMatchedCount || 0) > 0 && (
+                      <span className="text-sky-700">
+                        模糊命中 {jdMatch.fuzzyMatchedCount} 项
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {localExtracted.cleanedJd && (
+                      <button
+                        type="button"
+                        onClick={() => setShowJdHighlight((v) => !v)}
+                        aria-pressed={showJdHighlight}
+                        className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                          showJdHighlight
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-white text-slate-600 border border-slate-200 hover:text-slate-900'
+                        }`}
+                      >
+                        <Highlighter className="h-2.5 w-2.5" />
+                        原文高亮
+                      </button>
+                    )}
+                    {(removedJdKeys.length > 0 || manualJdSkills.length > 0) && (
+                      <button
+                        type="button"
+                        onClick={handleResetManualJdEdits}
+                        className="inline-flex items-center gap-0.5 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 hover:text-slate-900"
+                        title="恢复自动提取的默认关键词"
+                      >
+                        <RotateCcw className="h-2.5 w-2.5" />
+                        重置修正
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Optional In-Context Highlighted JD Text */}
+                {showJdHighlight && highlightedJdSegments.length > 0 && (
+                  <div
+                    data-testid="jd-highlight-preview"
+                    className="max-h-32 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 text-[11px] leading-relaxed text-slate-700 whitespace-pre-wrap"
+                  >
+                    {highlightedJdSegments.map((seg, idx) => {
+                      if (!seg.detail) return <span key={idx}>{seg.text}</span>;
+                      const d = seg.detail;
+                      const cls =
+                        d.matchType === 'missing'
+                          ? d.tier === 'core'
+                            ? 'rounded bg-rose-100 px-0.5 text-rose-900 font-medium'
+                            : d.tier === 'bonus'
+                              ? 'rounded bg-slate-200/80 px-0.5 text-slate-700'
+                              : 'rounded bg-amber-100 px-0.5 text-amber-900'
+                          : d.matchType === 'fuzzy'
+                            ? 'rounded bg-sky-100 px-0.5 text-sky-900'
+                            : 'rounded bg-emerald-100 px-0.5 text-emerald-900 font-medium';
+                      return (
+                        <mark
+                          key={idx}
+                          title={`${d.keyword} · ${d.matchType === 'missing' ? '简历未覆盖' : '已命中'}`}
+                          className={cls}
+                        >
+                          {seg.text}
+                        </mark>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* LLM Semantic Relevance Scoring View (replaces literal text comparison when active) */}
+                {jdEngine === 'llm' && visibleSemanticReport ? (
+                  <div className="space-y-2" data-testid="llm-semantic-score-report">
+                    <div className="rounded-lg border border-blue-200/80 bg-white p-2.5 space-y-1">
+                      <div className="text-[11px] font-semibold text-slate-900">
+                        {visibleSemanticReport.summary}
+                      </div>
+                      {visibleSemanticReport.roleAlignment && (
+                        <div className="text-[10.5px] leading-relaxed text-slate-600">
+                          {visibleSemanticReport.roleAlignment}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      {visibleSemanticReport.skillScores.map((item) => {
+                        const isStrong = item.status === 'strong';
+                        const isPartial = item.status === 'partial';
+                        const scoreColor = isStrong
+                          ? 'text-emerald-700'
+                          : isPartial
+                            ? 'text-amber-700'
+                            : 'text-rose-700';
+                        const barColor = isStrong
+                          ? 'bg-emerald-500'
+                          : isPartial
+                            ? 'bg-amber-500'
+                            : 'bg-rose-500';
+                        const borderColor = isStrong
+                          ? 'border-emerald-200/80 bg-emerald-50/30'
+                          : isPartial
+                            ? 'border-amber-200/80 bg-amber-50/30'
+                            : 'border-rose-200/80 bg-rose-50/30';
+                        return (
+                          <div
+                            key={`sem-${item.keyword}`}
+                            className={`rounded-lg border p-2 space-y-1 ${borderColor}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-1 min-w-0">
+                                <span className="text-[11px] font-semibold text-slate-900">
+                                  {item.keyword}
+                                </span>
+                                {item.tier === 'core' && (
+                                  <span className="rounded bg-rose-100 px-1 text-[9px] font-semibold text-rose-700">
+                                    核心
+                                  </span>
+                                )}
+                                {item.tier === 'bonus' && (
+                                  <span className="rounded bg-slate-200/80 px-1 text-[9px] text-slate-600">
+                                    加分
+                                  </span>
+                                )}
+                                {item.category && (
+                                  <span className="rounded bg-slate-100 px-1 text-[9px] text-slate-600">
+                                    {item.category}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <span className={`font-mono text-[11px] font-bold tabular-nums ${scoreColor}`}>
+                                  {item.relevanceScore}分
+                                </span>
+                                <button
+                                  type="button"
+                                  aria-label={`删除关键词 ${item.keyword}`}
+                                  onClick={() => handleRemoveJdKeyword(item.keyword)}
+                                  className="rounded p-0.5 text-slate-400 hover:bg-black/10 hover:text-slate-700"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                            </div>
+                            <div className="h-1 w-full overflow-hidden rounded-full bg-slate-200/80">
+                              <div
+                                className={`h-full rounded-full transition-all ${barColor}`}
+                                style={{ width: `${item.relevanceScore}%` }}
+                              />
+                            </div>
+                            <div className="text-[10.5px] leading-snug text-slate-700">
+                              <span className="font-medium text-slate-500">经历佐证：</span>
+                              {item.evidence}
+                            </div>
+                            {item.gapAdvice && (
+                              <div className="text-[10.5px] leading-snug text-amber-800">
+                                <span className="font-medium">补强建议：</span>
+                                {item.gapAdvice}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : jdEngine === 'llm' && groupedLlmCategories.length > 0 ? (
+                  <div className="space-y-2" data-testid="llm-categorized-jd-view">
+                    {groupedLlmCategories.map((group) => (
+                      <div
+                        key={group.name}
+                        className="rounded-lg border border-slate-200/80 bg-white p-2 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between text-[10.5px]">
+                          <span className="font-semibold text-slate-800">{group.name}</span>
+                          <span className="font-mono text-[10px] text-slate-500">
+                            命中 {group.items.filter((i) => i.matchType !== 'missing').length}/
+                            {group.items.length}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {group.items.map((item) => {
+                            const isMissing = item.matchType === 'missing';
+                            const isFuzzy = item.matchType === 'fuzzy';
+                            const isSynonym = item.matchType === 'synonym';
+                            const isCore = item.tier === 'core';
+                            const isBonus = item.tier === 'bonus';
+                            const chipCls = isMissing
+                              ? isCore
+                                ? 'border-rose-200 bg-rose-50 text-rose-800 font-medium'
+                                : isBonus
+                                  ? 'border-slate-200 bg-slate-100/80 text-slate-600'
+                                  : 'border-amber-200 bg-amber-50 text-amber-800'
+                              : isFuzzy
+                                ? 'border-sky-200 bg-sky-50 text-sky-800'
+                                : 'border-emerald-200 bg-emerald-50 text-emerald-800';
+                            const tip = isMissing
+                              ? `未命中 · ${isCore ? '核心要求' : isBonus ? '加分项' : '常规要求'}（点 × 可移除误提）`
+                              : isSynonym
+                                ? `同义命中：简历含「${item.matchedVia}」`
+                                : isFuzzy
+                                  ? `模糊命中：简历含「${item.matchedVia}」`
+                                  : '精准命中';
+                            return (
+                              <span
+                                key={`${group.name}-${item.keyword}`}
+                                title={tip}
+                                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10.5px] ${chipCls}`}
+                              >
+                                <span>{item.keyword}</span>
+                                {!isMissing && isSynonym && (
+                                  <span className="rounded bg-emerald-100 px-1 text-[9px] font-medium text-emerald-700">
+                                    同义
+                                  </span>
+                                )}
+                                {!isMissing && isFuzzy && (
+                                  <span className="rounded bg-sky-100 px-1 text-[9px] font-medium text-sky-700">
+                                    模糊
+                                  </span>
+                                )}
+                                {isMissing && isCore && (
+                                  <span className="rounded bg-rose-100 px-1 text-[9px] font-semibold text-rose-700">
+                                    核心
+                                  </span>
+                                )}
+                                {isMissing && isBonus && (
+                                  <span className="rounded bg-slate-200/80 px-1 text-[9px] text-slate-600">
+                                    加分
+                                  </span>
+                                )}
+                                {item.source === 'manual' && (
+                                  <span className="rounded bg-blue-100 px-1 text-[9px] text-blue-700">
+                                    手动
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  aria-label={`删除关键词 ${item.keyword}`}
+                                  onClick={() => handleRemoveJdKeyword(item.keyword)}
+                                  className="ml-0.5 rounded p-0.5 opacity-60 hover:bg-black/10 hover:opacity-100"
+                                >
+                                  <X className="h-2.5 w-2.5" />
+                                </button>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    {jdMatch.matched.length > 0 && (
+                      <div>
+                        <div className="text-[10.5px] font-medium text-emerald-700 mb-1">
+                          简历已命中（{jdMatch.matched.length} · 点 × 可剔除误提）
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {(jdMatch.matchedDetails && jdMatch.matchedDetails.length > 0
+                            ? jdMatch.matchedDetails
+                            : jdMatch.matched.map(
+                                (kw): LocalJdKeywordDetail => ({
+                                  keyword: kw,
+                                  weight: 2,
+                                  tier: 'standard',
+                                  matchType: 'exact',
+                                  source: 'local',
+                                }),
+                              )
+                          ).map((item) => {
+                            const isFuzzy = item.matchType === 'fuzzy';
+                            const isSynonym = item.matchType === 'synonym';
+                            const tip = isSynonym
+                              ? `同义词库映射命中：简历含「${item.matchedVia}」`
+                              : isFuzzy
+                                ? `模糊匹配：简历片段「${item.matchedVia}」（相似度 ${Math.round((item.similarity || 0) * 100)}%）`
+                                : `精准命中（权重 ${item.weight}）`;
+                            return (
+                              <span
+                                key={item.keyword}
+                                title={tip}
+                                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10.5px] ${
+                                  isFuzzy
+                                    ? 'border-sky-200 bg-sky-50 text-sky-800'
+                                    : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                }`}
+                              >
+                                <span>{item.keyword}</span>
+                                {isSynonym && (
+                                  <span className="rounded bg-emerald-100 px-1 text-[9px] font-medium text-emerald-700">
+                                    同义
+                                  </span>
+                                )}
+                                {isFuzzy && (
+                                  <span className="rounded bg-sky-100 px-1 text-[9px] font-medium text-sky-700">
+                                    模糊
+                                  </span>
+                                )}
+                                {item.source === 'manual' && (
+                                  <span className="rounded bg-blue-100 px-1 text-[9px] text-blue-700">
+                                    手动
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  aria-label={`删除关键词 ${item.keyword}`}
+                                  onClick={() => handleRemoveJdKeyword(item.keyword)}
+                                  className="ml-0.5 rounded p-0.5 opacity-60 hover:bg-black/10 hover:opacity-100"
+                                >
+                                  <X className="h-2.5 w-2.5" />
+                                </button>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {jdMatch.missing.length > 0 && (
+                      <div>
+                        <div className="text-[10.5px] font-medium text-amber-700 mb-1">
+                          JD 提及但简历未出现（{jdMatch.missing.length} · 按核心度排序，点 × 可剔除误提）
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {(jdMatch.missingDetails && jdMatch.missingDetails.length > 0
+                            ? jdMatch.missingDetails
+                            : jdMatch.missing.map(
+                                (kw): LocalJdKeywordDetail => ({
+                                  keyword: kw,
+                                  weight: 2,
+                                  tier: 'standard',
+                                  matchType: 'missing',
+                                  source: 'local',
+                                }),
+                              )
+                          ).map((item) => {
+                            const isCore = item.tier === 'core';
+                            const isBonus = item.tier === 'bonus';
+                            return (
+                              <span
+                                key={item.keyword}
+                                title={
+                                  isCore
+                                    ? `核心要求（高权重 ${item.weight}）· 如误提可点 × 删除`
+                                    : isBonus
+                                      ? `加分/优先项（权重 ${item.weight}）`
+                                      : `常规要求（权重 ${item.weight}）`
+                                }
+                                className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10.5px] ${
+                                  isCore
+                                    ? 'border-rose-200 bg-rose-50 text-rose-800 font-medium'
+                                    : isBonus
+                                      ? 'border-slate-200 bg-slate-100/80 text-slate-600'
+                                      : 'border-amber-200 bg-amber-50 text-amber-800'
+                                }`}
+                              >
+                                <span>{item.keyword}</span>
+                                {isCore && (
+                                  <span className="rounded bg-rose-100 px-1 text-[9px] font-semibold text-rose-700">
+                                    核心
+                                  </span>
+                                )}
+                                {isBonus && (
+                                  <span className="rounded bg-slate-200/80 px-1 text-[9px] text-slate-600">
+                                    加分
+                                  </span>
+                                )}
+                                {item.source === 'manual' && (
+                                  <span className="rounded bg-blue-100 px-1 text-[9px] text-blue-700">
+                                    手动
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  aria-label={`删除关键词 ${item.keyword}`}
+                                  onClick={() => handleRemoveJdKeyword(item.keyword)}
+                                  className="ml-0.5 rounded p-0.5 opacity-60 hover:bg-black/10 hover:opacity-100"
+                                >
+                                  <X className="h-2.5 w-2.5" />
+                                </button>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Human-in-the-loop Manual Keyword Add Bar */}
+                <div className="flex items-center gap-1.5 pt-1 border-t border-slate-200/70">
+                  <input
+                    type="text"
+                    aria-label="手动补充 JD 关键词"
+                    value={manualKwInput}
+                    onChange={(e) => setManualKwInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddManualJdKeyword();
+                      }
+                    }}
+                    placeholder="漏提了？手动补充技能词（逗号分隔）..."
+                    className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-800 focus:border-blue-600 focus:outline-none"
+                  />
+                  <select
+                    aria-label="补充关键词权重级别"
+                    value={manualKwTier}
+                    onChange={(e) => setManualKwTier(e.target.value as JdKeywordTier)}
+                    className="rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[11px] text-slate-700 focus:border-blue-600 focus:outline-none"
+                  >
+                    <option value="core">核心</option>
+                    <option value="standard">常规</option>
+                    <option value="bonus">加分</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleAddManualJdKeyword}
+                    disabled={!manualKwInput.trim()}
+                    className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-slate-900 px-2 py-1 text-[11px] font-medium text-white hover:bg-slate-800 disabled:opacity-40"
+                  >
+                    <Plus className="h-3 w-3" />
+                    添加
+                  </button>
+                </div>
               </div>
             )}
           </div>

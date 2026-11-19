@@ -359,11 +359,79 @@ export interface VersionDiffReport {
   sections: DiffSectionReport[];
 }
 
+export type JdKeywordTier = 'core' | 'standard' | 'bonus';
+export type JdKeywordMatchType = 'exact' | 'synonym' | 'fuzzy' | 'missing';
+export type JdScanEngine = 'local' | 'llm';
+export type JdKeywordSource = 'local' | 'llm' | 'manual';
+
+export interface JdStructuredSkillItem {
+  keyword: string;
+  tier: JdKeywordTier;
+  category?: string;
+  source?: JdKeywordSource;
+  weight?: number;
+  count?: number;
+  surfaceTerms?: string[];
+}
+
+export interface JdStructuredExtractResult {
+  categories: Array<{
+    name: string;
+    items: Array<{
+      keyword: string;
+      tier: JdKeywordTier;
+    }>;
+  }>;
+  ignoredSoftSkills?: string[];
+}
+
+export interface LocalJdKeywordDetail {
+  keyword: string;
+  weight: number;
+  tier: JdKeywordTier;
+  matchType: JdKeywordMatchType;
+  matchedVia?: string;
+  similarity?: number;
+  category?: string;
+  source?: JdKeywordSource;
+}
+
 export interface LocalJdMatchResult {
   totalKeywords: number;
   matched: string[];
   missing: string[];
   scorePct: number;
+  cleanedJd?: string;
+  noiseRemovedCount?: number;
+  synonymMatchedCount?: number;
+  fuzzyMatchedCount?: number;
+  matchedDetails?: LocalJdKeywordDetail[];
+  missingDetails?: LocalJdKeywordDetail[];
+}
+
+export type JdSemanticStatus = 'strong' | 'partial' | 'missing';
+
+export interface JdSemanticSkillScore {
+  keyword: string;
+  tier: JdKeywordTier;
+  category?: string;
+  /** Semantic relevance score (0-100) comparing resume experiences & skills against this JD requirement */
+  relevanceScore: number;
+  status: JdSemanticStatus;
+  /** Specific experience or skill evidence cited from the user's resume */
+  evidence: string;
+  /** Actionable gap advice when status is partial or missing */
+  gapAdvice?: string;
+}
+
+export interface JdSemanticMatchReport {
+  overallScore: number;
+  summary: string;
+  roleAlignment?: string;
+  skillScores: JdSemanticSkillScore[];
+  usedModel?: string;
+  usedProvider?: string;
+  source: 'api' | 'external-json';
 }
 
 export interface AuditPromptPreset {

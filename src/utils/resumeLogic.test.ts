@@ -11,16 +11,22 @@ import {
   buildAiEndpointPreview,
   buildAiRequestDefaults,
   buildExpandExperiencePrompt,
+  buildJdExtractPrompt,
+  buildJdSemanticScoringPrompt,
   buildPdfTitle,
   classifyAiNetworkError,
   clearPlaceholderContent,
   cloneResumeDoc,
+  computeWeightedSemanticScore,
   countResumeChars,
   createCustomRoleDoc,
   deriveTargetedResumeVersion,
   detectWeakBulletOpener,
   emptyData,
+  evaluateJdSkillsAgainstResume,
+  extractLocalJdSkills,
   extractResumePositionLabel,
+  flattenStructuredJdSkills,
   fmtRange,
   formatFontWeightLabel,
   formatLineHeightLabel,
@@ -30,23 +36,30 @@ import {
   getAllHelperMemos,
   getContactList,
   hasQuantifiedDescription,
+  highlightJdSegments,
   isCustomAiReady,
   maskEmail,
   maskPhone,
   mergeImportedResumes,
+  normalizeJdKeyword,
+  normalizeJdSemanticMatchReport,
   normalizeMeta,
   normalizeStarSuggestions,
   parseExternalAuditJson,
   parseExternalExpandExperienceJson,
+  parseExternalJdExtractJson,
+  parseExternalJdSemanticJson,
   parseExternalTailorJson,
   parsePlainTextResumeLocal,
   parseRange,
+  preprocessJdText,
   resolveBaseFontWeight,
   resolveLineHeight,
   resolvePalette,
   richSegs,
   runLocalAudit,
   runPdfExportPreflight,
+  scoreJdSemanticRelevanceWithLlm,
   searchTemplates,
   summarizeAiConfigErrors,
   validateCustomAiConfig,
@@ -242,8 +255,182 @@ test('analyzeJdMatchLocal scores matched and missing JD keywords completely offl
   assert.ok(result.totalKeywords >= 5);
   assert.ok(result.matched.some((k) => k.toLowerCase().includes('eplan')));
   assert.ok(result.matched.some((k) => k.toLowerCase().includes('profinet')));
+  assert.ok(result.matched.includes('TIA Portal'));
+  assert.ok(!result.matched.includes('Portal') && !result.missing.includes('Portal'));
   assert.ok(result.missing.some((k) => k.toLowerCase().includes('labview') || k.toLowerCase().includes('twincat')));
   assert.ok(result.scorePct > 0 && result.scorePct < 100);
+});
+
+test('preprocessJdText cleans mojibake, HTML, zero-width chars, emojis, full-width ASCII, and splits slashes safely', () => {
+  const noisy =
+    '\uFEFF<p>🔥 1、**熟练使用** Ｊａｖａ&nbsp;/&nbsp;Ｐｙｔｈｏｎ\u200B\uFFFD，熟悉 C/C++ 与 CI/CD 流程！</p>\n• 掌握 SQL/Tableau';
+  const { cleaned, noiseRemovedCount } = preprocessJdText(noisy);
+
+  assert.ok(noiseRemovedCount >= 5);
+  assert.ok(!cleaned.includes('<p>') && !cleaned.includes('&nbsp;'));
+  assert.ok(!cleaned.includes('\u200B') && !cleaned.includes('\uFFFD') && !cleaned.includes('\uFEFF'));
+  assert.ok(!cleaned.includes('🔥') && !cleaned.includes('**'));
+  assert.ok(cleaned.includes('Java, Python'));
+  assert.ok(cleaned.includes('SQL, Tableau'));
+  assert.ok(cleaned.includes('C/C++'), 'should preserve protected C/C++ token');
+  assert.ok(cleaned.includes('CI/CD'), 'should preserve protected CI/CD token');
+});
+
+test('normalizeJdKeyword collapses proficiency variants and synonym aliases while filtering HR buzzwords', () => {
+  const a = normalizeJdKeyword('熟练使用 Java');
+  const b = normalizeJdKeyword('熟悉 Java');
+  const c = normalizeJdKeyword('精通 Java 开发经验');
+  assert.equal(a?.canonical, 'Java');
+  assert.equal(b?.canonical, 'Java');
+  assert.equal(c?.canonical, 'Java');
+  assert.equal(a?.key, b?.key);
+
+  assert.equal(normalizeJdKeyword('熟悉 K8s')?.canonical, 'Kubernetes');
+  assert.equal(normalizeJdKeyword('熟练掌握 PowerBI')?.canonical, 'Power BI');
+  assert.equal(normalizeJdKeyword('熟悉西门子博途')?.canonical, 'TIA Portal');
+  assert.equal(normalizeJdKeyword('抗压能力'), null);
+  assert.equal(normalizeJdKeyword('核心抓手'), null);
+  assert.equal(normalizeJdKeyword('业务闭环'), null);
+});
+
+test('analyzeJdMatchLocal applies synonym lexicon, word boundaries, fuzzy Chinese matching, and core-first weighting', () => {
+  const data = emptyData();
+  data.basic.name = '测试候选人';
+  data.skills = [
+    { id: 's1', cat: '后端与数据', items: '熟悉 Java、MySQL、MongoDB、Kubernetes 容器编排、PowerBI 看板' },
+  ];
+  data.experience = [
+    {
+      id: 'e1',
+      company: '星图零售科技',
+      role: '后端与数据工程师',
+      period: '2022.06 - 至今',
+      subtitle: '负责核心业务数据与零售门店分析',
+      kpis: [],
+      bullets: [
+        '主导华南区零售进销存数据治理与异常盘点自动化，周报耗时缩短 80%。',
+        '构建 RFM 会员分层与促活运营策略，推动 30 日复购率提升 14%。',
+      ],
+    },
+  ];
+  const doc = {
+    id: 'jd-match-test',
+    name: '测试简历',
+    meta: normalizeMeta({}),
+    data,
+  };
+
+  const jd = `
+    <p>1. 精通 Ｊａｖａ 开发，熟练使用 Java 与 SQL 查询\uFFFD；</p>
+    2. 熟悉 K8s 与 Power BI 报表搭建，具备商业智能分析能力；
+    3. 负责零售进销存管理与会员分层运营，抗压能力强、有大局观与核心抓手；
+    4. 精通 Go 语言高并发服务端架构；
+    5. 了解 Rust 或 Scala 者优先。
+  `;
+
+  const result = analyzeJdMatchLocal(doc, jd);
+
+  // Deduplication: "精通 Java" and "熟练使用 Java" collapse to a single canonical "Java"
+  assert.equal(result.matched.filter((k) => k === 'Java').length, 1);
+  assert.equal(result.missing.filter((k) => k === 'Java').length, 0);
+
+  // Synonym & one-way entailment hits: SQL <- MySQL, Kubernetes <- K8s, Power BI <- PowerBI, BI 看板 <- PowerBI
+  assert.ok(result.matched.includes('SQL'));
+  assert.ok(result.matched.includes('Kubernetes'));
+  assert.ok(result.matched.includes('Power BI'));
+  assert.ok((result.synonymMatchedCount || 0) >= 2);
+  assert.ok(result.matchedDetails?.some((d) => d.keyword === 'SQL' && d.matchType === 'synonym'));
+
+  // Word-boundary protection: "Go" must NOT falsely match "MongoDB"
+  assert.ok(result.missing.includes('Go'), 'Go must not falsely match MongoDB');
+
+  // Fuzzy semantic match for ambiguous Chinese descriptions
+  assert.ok(
+    result.matchedDetails?.some((d) => d.matchType === 'fuzzy'),
+    'should fuzzy-match ambiguous Chinese domain descriptions',
+  );
+  assert.ok((result.fuzzyMatchedCount || 0) >= 1);
+
+  // Vague HR buzzwords and orphan trailing verbs (e.g. "查询" from "SQL 查询") must not pollute missing keywords
+  assert.ok(!result.missing.some((k) => /抗压|大局观|核心抓手|^查询$/.test(k)));
+
+  // Weighted ordering: core missing skill ("Go") must rank ahead of bonus missing skills ("Rust"/"Scala")
+  const goIdx = result.missing.indexOf('Go');
+  const rustIdx = result.missing.indexOf('Rust');
+  assert.ok(goIdx !== -1 && rustIdx !== -1 && goIdx < rustIdx);
+  const goDetail = result.missingDetails?.find((d) => d.keyword === 'Go');
+  const rustDetail = result.missingDetails?.find((d) => d.keyword === 'Rust');
+  assert.equal(goDetail?.tier, 'core');
+  assert.equal(rustDetail?.tier, 'bonus');
+});
+
+test('dual-engine LLM JD extractor builds HR/tech prompt, parses structured & flat JSON, supports manual edits and highlights', () => {
+  const prompt = buildJdExtractPrompt('精通 React，了解 Rust 优先，要求抗压能力强、有责任心', '高级前端工程师');
+  assert.ok(prompt.includes('资深的 HR 和技术专家'));
+  assert.ok(prompt.includes('忽略所有软性要求'));
+  assert.ok(prompt.includes('高级前端工程师'));
+
+  // 1. Parse canonical categories JSON wrapped in DeepSeek-R1 <think> + markdown fence
+  const structuredRaw = `<think>Extracting hard skills { "draft": 1 }...</think>
+\`\`\`json
+{
+  "categories": [
+    { "name": "前端", "items": [{ "keyword": "React", "tier": "core" }, { "keyword": "TypeScript", "tier": "standard" }] },
+    { "name": "数据库", "items": [{ "keyword": "SQL", "tier": "core" }] },
+    { "name": "加分项", "items": [{ "keyword": "Rust", "tier": "bonus" }, { "keyword": "有责任心", "tier": "core" }] }
+  ],
+  "ignoredSoftSkills": ["抗压能力强", "有责任心"]
+}
+\`\`\``;
+  const parsedStructured = parseExternalJdExtractJson(structuredRaw);
+  assert.equal(parsedStructured.categories.length, 3);
+  assert.deepEqual(parsedStructured.ignoredSoftSkills, ['抗压能力强', '有责任心']);
+  // HR fluff accidentally returned by LLM is still filtered defensively
+  assert.ok(!parsedStructured.categories[2].items.some((i) => i.keyword.includes('责任心')));
+
+  // 2. Parse flexible flat category JSON (e.g. from ChatGPT/Kimi) with proficiency levels
+  const flatRaw = JSON.stringify({
+    前端: ['精通 Vue', '熟悉 TypeScript'],
+    后端: { 精通: ['Python'], 了解: ['Go'] },
+    加分项: ['Kubernetes'],
+  });
+  const parsedFlat = parseExternalJdExtractJson(flatRaw);
+  const flatSkills = flattenStructuredJdSkills(parsedFlat);
+  assert.equal(flatSkills.find((s) => s.keyword === 'Vue')?.tier, 'core');
+  assert.equal(flatSkills.find((s) => s.keyword === 'Python')?.tier, 'core');
+  assert.equal(flatSkills.find((s) => s.keyword === 'Go')?.tier, 'bonus');
+  assert.equal(flatSkills.find((s) => s.keyword === 'Kubernetes')?.category, '加分项');
+
+  // 3. Human-in-the-loop [x] removal & manual addition recalculate score live
+  const doc = cloneResumeDoc(DEFAULT_RESUMES[0]);
+  const baseSkills = extractLocalJdSkills('精通 Python、SQL，熟悉 Java，了解 Rust 优先').skills;
+  const before = evaluateJdSkillsAgainstResume(doc, baseSkills);
+  assert.ok(before.missing.includes('Java'));
+
+  // Remove "Java" via [x] -> score goes up and Java disappears
+  const afterRemove = evaluateJdSkillsAgainstResume(
+    doc,
+    baseSkills.filter((s) => s.keyword !== 'Java'),
+  );
+  assert.ok(!afterRemove.missing.includes('Java'));
+  assert.ok(afterRemove.scorePct > before.scorePct);
+
+  // Manually add "Tableau" (matched in starter doc) and "Docker" (missing)
+  const afterAdd = evaluateJdSkillsAgainstResume(doc, [
+    ...baseSkills.filter((s) => s.keyword !== 'Java'),
+    { keyword: 'Tableau', tier: 'core', source: 'manual' },
+    { keyword: 'Docker', tier: 'core', source: 'manual' },
+  ]);
+  assert.ok(afterAdd.matchedDetails?.some((d) => d.keyword === 'Tableau' && d.source === 'manual'));
+  assert.ok(afterAdd.missingDetails?.some((d) => d.keyword === 'Docker' && d.source === 'manual'));
+
+  // 4. In-context JD highlighter tags matched & missing segments cleanly
+  const segments = highlightJdSegments(
+    '精通 Python 与 SQL，了解 Docker 优先',
+    [...(afterAdd.matchedDetails || []), ...(afterAdd.missingDetails || [])],
+  );
+  assert.ok(segments.some((s) => s.text.toLowerCase() === 'python' && s.detail?.matchType === 'exact'));
+  assert.ok(segments.some((s) => s.text.toLowerCase() === 'docker' && s.detail?.matchType === 'missing'));
 });
 
 test('applyTailorProposal creates non-destructive new version preserving real company & dates', () => {
@@ -874,5 +1061,152 @@ test('experience STAR expansion helpers validate inputs, normalize up to 3 STAR 
   assert.throws(() => parseExternalExpandExperienceJson('not valid json'), /合法 JSON/);
   assert.throws(() => parseExternalExpandExperienceJson('{"suggestions":[]}'), /未找到有效/);
 });
+
+test('LLM JD semantic relevance scoring helpers build prompt, normalize/parse JSON, compute weighted score, and invoke API cleanly', async () => {
+  const doc = cloneResumeDoc(DEFAULT_RESUMES[0]);
+  const skills = [
+    { keyword: 'Python', tier: 'core' as const, category: '数据与工程', source: 'llm' as const },
+    { keyword: 'SQL', tier: 'core' as const, category: '数据库', source: 'llm' as const },
+    { keyword: 'Kubernetes', tier: 'bonus' as const, category: '加分项', source: 'llm' as const },
+  ];
+  const jdText = '岗位职责：负责零售业务数据建模与自动化报表；精通 Python 与 SQL，了解 Kubernetes 优先。';
+
+  // 1. Prompt builder includes JD, skill tiers, resume experiences, and JSON contract
+  const prompt = buildJdSemanticScoringPrompt(doc, jdText, skills);
+  assert.ok(prompt.includes('深层语义分析'));
+  assert.ok(prompt.includes('Python（核心/精通/数据与工程）'));
+  assert.ok(prompt.includes('Kubernetes（加分/了解/加分项）'));
+  assert.ok(prompt.includes(doc.data.basic.name));
+  assert.ok(prompt.includes('"skillScores"'));
+
+  // 2. External JSON parser strips <think> traces, clamps scores, backfills omitted skills, and enforces weighted overall score
+  const rawExternal = `<think>Evaluating { "internal": true }...</think>
+\`\`\`json
+{
+  "overallScore": 99,
+  "roleAlignment": "数据分析经历高度契合，云原生经验待补齐",
+  "summary": "核心数据技能实战扎实",
+  "skillScores": [
+    { "keyword": "Python", "relevanceScore": 120, "evidence": "用 Python 搭建门店自动化清洗流水线，周报提效 85%" },
+    { "keyword": "SQL", "relevanceScore": 65, "evidence": "在多门店台账分析中使用 SQL 聚合查询", "gapAdvice": "补充复杂窗口函数与慢查询调优案例" }
+  ]
+}
+\`\`\``;
+  const parsed = parseExternalJdSemanticJson(rawExternal, skills);
+  assert.equal(parsed.source, 'external-json');
+  assert.equal(parsed.skillScores.length, 3, 'should backfill omitted Kubernetes skill');
+
+  const py = parsed.skillScores.find((s) => s.keyword === 'Python')!;
+  const sql = parsed.skillScores.find((s) => s.keyword === 'SQL')!;
+  const k8s = parsed.skillScores.find((s) => s.keyword === 'Kubernetes')!;
+  assert.equal(py.relevanceScore, 100);
+  assert.equal(py.status, 'strong');
+  assert.equal(py.category, '数据与工程');
+  assert.equal(sql.relevanceScore, 65);
+  assert.equal(sql.status, 'partial');
+  assert.ok(sql.gapAdvice?.includes('窗口函数'));
+  assert.equal(k8s.relevanceScore, 0);
+  assert.equal(k8s.status, 'missing');
+
+  // Weighted score: (100*3 + 65*3 + 0*1) / (3+3+1) = 495 / 7 = 71 (far from inflated 99 -> recomputed)
+  assert.equal(computeWeightedSemanticScore(parsed.skillScores), 71);
+  assert.equal(parsed.overallScore, 71);
+
+  // Removing the missing Kubernetes skill recalculates weighted score upward: (300 + 195) / 6 = 83
+  assert.equal(
+    computeWeightedSemanticScore(parsed.skillScores.filter((s) => s.keyword !== 'Kubernetes')),
+    83,
+  );
+
+  // 3. normalizeJdSemanticMatchReport rejects invalid shapes
+  assert.throws(() => normalizeJdSemanticMatchReport(null), /合法 JSON 对象/);
+  assert.throws(() => normalizeJdSemanticMatchReport({ skillScores: [] }), /未找到有效/);
+
+  // 4. Async scoreJdSemanticRelevanceWithLlm sends cleaned JD + resumeText + skills to /api/ai/semantic-match
+  let capturedUrl = '';
+  let capturedBody: Record<string, unknown> = {};
+  const mockFetcher: typeof fetch = async (input, init) => {
+    capturedUrl = String(input);
+    capturedBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        report: {
+          overallScore: 84,
+          roleAlignment: '岗位背景高度契合',
+          summary: '工作经历与 Python/SQL 硬性要求深度吻合',
+          skillScores: [
+            {
+              keyword: 'Python',
+              tier: 'core',
+              relevanceScore: 95,
+              status: 'strong',
+              evidence: '在星云智选主导 Python 自动化脚本，周报耗时下降 85%',
+            },
+            {
+              keyword: 'SQL',
+              tier: 'core',
+              relevanceScore: 88,
+              status: 'strong',
+              evidence: '支撑 40 家门店进销存 SQL 分析与复盘看板',
+            },
+            {
+              keyword: 'Kubernetes',
+              tier: 'bonus',
+              relevanceScore: 20,
+              status: 'missing',
+              evidence: '简历未涉及容器编排实践',
+              gapAdvice: '加分项，可按需补充 Docker/K8s 部署经验',
+            },
+          ],
+        },
+        meta: { provider: 'custom', model: 'deepseek-chat' },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+
+  const apiReport = await scoreJdSemanticRelevanceWithLlm({
+    doc,
+    jdText: `<p>${jdText}</p>`,
+    skills,
+    customConfig: {
+      enabled: true,
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'sk-test-valid-123456',
+      model: 'deepseek-chat',
+      fetchedModels: [],
+    },
+    fetcher: mockFetcher,
+  });
+
+  assert.equal(capturedUrl, '/api/ai/semantic-match');
+  assert.equal(typeof capturedBody.resumeText, 'string');
+  assert.ok(!(capturedBody.jdText as string).includes('<p>'), 'should send cleaned JD text');
+  assert.equal((capturedBody.skills as unknown[]).length, 3);
+  assert.equal(apiReport.source, 'api');
+  assert.equal(apiReport.usedModel, 'deepseek-chat');
+  assert.equal(apiReport.usedProvider, 'custom');
+  assert.equal(apiReport.overallScore, 84);
+  assert.equal(apiReport.skillScores[0].keyword, 'Python');
+  assert.equal(apiReport.skillScores[0].relevanceScore, 95);
+
+  // 5. Rejects too-short JD and propagates server error cleanly
+  await assert.rejects(
+    () => scoreJdSemanticRelevanceWithLlm({ doc, jdText: '短JD', fetcher: mockFetcher }),
+    /至少 8 个字/,
+  );
+
+  const errorFetcher: typeof fetch = async () =>
+    new Response(JSON.stringify({ error: 'API Key 无效' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  await assert.rejects(
+    () => scoreJdSemanticRelevanceWithLlm({ doc, jdText, skills, fetcher: errorFetcher }),
+    /API Key 无效/,
+  );
+});
+
 
 

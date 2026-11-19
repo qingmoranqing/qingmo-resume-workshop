@@ -1047,5 +1047,114 @@ export function createApiApp(): express.Express {
     }
   });
 
+  /**
+   * LLM-enhanced structured JD hard-skill extractor (ignores soft skills, splits proficiency tiers & categories)
+   */
+  app.post('/api/ai/extract-jd', async (req: Request, res: Response) => {
+    const { jdText, roleHint, provider, modelOverride, customConfig } = req.body ?? {};
+    if (typeof jdText !== 'string' || jdText.trim().length < 8) {
+      res.status(400).json({ error: '请先粘贴目标岗位 JD 原文（至少 8 个字）再执行 LLM 增强提取。' });
+      return;
+    }
+
+    try {
+      const result = await invokeStructuredAi({
+        provider,
+        modelOverride,
+        customConfig,
+        systemInstruction:
+          '你是一个资深的 HR 和技术专家。请阅读以下 JD，并精准提取硬性要求与专业技能词。必须严格遵守以下规则：1）忽略所有软性要求与套话（如沟通能力强、抗压、有责任心、团队合作、自驱力、大局观、学习能力、五险一金等），可将其简短记录在 ignoredSoftSkills 中；2）将提取出的硬性技能词按合理分类输出（如：前端、后端、数据库、工程/工具、业务/领域、加分项，若为非技术岗请按该行业贴切分类名归类，如：专业技能、软件工具、行业经验、资质证书、加分项）；3）如果遇到「精通 A，熟悉 B，了解 C」或「具备 D 优先」等不同熟练度要求，必须拆分成独立技能词并标注对应层级：core（精通/必须/核心/熟练掌握）、standard（熟悉/掌握/常规要求）、bonus（了解/优先/加分项）；4）同义表述去重归并，技能词简洁准确（如输出「Java」而不是「熟练使用 Java」）。仅输出严格合法的 JSON。',
+        userContent: [
+          roleHint ? `【参考岗位方向】${String(roleHint).trim()}` : '',
+          `【目标岗位 JD 原文】\n${jdText.trim().slice(0, 10000)}`,
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        jsonContractHint:
+          '{"categories":[{"name":"前端|后端|数据库|工具与平台|领域能力|加分项","items":[{"keyword":"具体技能词","tier":"core|standard|bonus"}]}],"ignoredSoftSkills":["抗压能力强","沟通能力好"]}',
+      });
+
+      res.json({
+        extracted: result.data,
+        meta: { provider: result.usedProvider, model: result.usedModel },
+      });
+    } catch (err: unknown) {
+      const status = (err as Error & { statusCode?: number }).statusCode;
+      if (status) {
+        res.status(status).json({ error: (err as Error).message });
+        return;
+      }
+      const mapped = mapAiError(err, String(customConfig?.model || provider || 'AI'));
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
+  /**
+   * LLM semantic relevance scoring: evaluates how deeply candidate experiences & skills match extracted JD hard skills
+   */
+  app.post('/api/ai/semantic-match', async (req: Request, res: Response) => {
+    const { jdText, skills, resumeText, roleHint, provider, modelOverride, customConfig } =
+      req.body ?? {};
+    if (typeof jdText !== 'string' || jdText.trim().length < 8) {
+      res.status(400).json({ error: '请先粘贴目标岗位 JD 原文（至少 8 个字）再执行语义打分。' });
+      return;
+    }
+    if (typeof resumeText !== 'string' || resumeText.trim().length < 20) {
+      res.status(400).json({ error: '简历内容过短，请先补充工作经历或专业技能后再进行语义打分。' });
+      return;
+    }
+    const cleanSkills = Array.isArray(skills)
+      ? skills
+          .filter((s) => s && typeof s === 'object' && typeof (s as { keyword?: unknown }).keyword === 'string')
+          .slice(0, 30)
+      : [];
+
+    try {
+      const skillLines =
+        cleanSkills.length > 0
+          ? cleanSkills
+              .map((s, idx) => {
+                const rec = s as { keyword: string; tier?: string; category?: string };
+                const tierLabel =
+                  rec.tier === 'core' ? '核心/精通' : rec.tier === 'bonus' ? '加分/了解' : '常规/熟悉';
+                const catLabel = rec.category ? `/${rec.category}` : '';
+                return `${idx + 1}. ${rec.keyword}（${tierLabel}${catLabel}）`;
+              })
+              .join('\n')
+          : '（未提供预提取列表，请直接从 JD 中提取硬性要求并逐项打分）';
+
+      const result = await invokeStructuredAi({
+        provider,
+        modelOverride,
+        customConfig,
+        systemInstruction:
+          '你是一位资深技术面试官与招聘总监。请跳过死板的字面关键词比对，基于深层语义与真实项目含金量，评估候选人简历中的工作/项目经历与目标 JD 硬性技能项之间的相关性并逐项打分（0-100 分）。评分准则：1）75-100 分（strong）：经历中有明确落地场景、量化成果或高阶架构应用，或具备等价/上位可迁移能力；2）40-74 分（partial）：仅在技能栏提及、或仅在经历中浅层/间接体现，缺乏深度佐证；3）0-39 分（missing）：简历未体现该能力或与岗位要求偏差较大；4）每项必须给出简历中的具体依据（evidence，15-40字，严禁编造经历），对 partial/missing 项给出具体可落地的补强建议（gapAdvice，15-35字）；5）按核心权重（core>standard>bonus）给出综合语义匹配分 overallScore（0-100）与一句整体评语 summary。仅输出严格合法 JSON，简体中文。',
+        userContent: [
+          roleHint ? `【目标岗位方向】${String(roleHint).trim()}` : '',
+          `【目标岗位 JD 原文】\n${jdText.trim().slice(0, 8000)}`,
+          `【待评估的硬性技能项清单】\n${skillLines}`,
+          `【候选人简历全文】\n${resumeText.trim().slice(0, 12000)}`,
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        jsonContractHint:
+          '{"overallScore":78,"roleAlignment":"核心数据建模与自动化经验高度契合，但缺少高并发后端实战佐证","summary":"一句话整体语义匹配结论","skillScores":[{"keyword":"Python","tier":"core","category":"后端与数据","relevanceScore":92,"status":"strong","evidence":"使用 Python(Pandas) 搭建自动化清洗流水线，周报耗时缩短85%","gapAdvice":""}]}',
+      });
+
+      res.json({
+        report: result.data,
+        meta: { provider: result.usedProvider, model: result.usedModel },
+      });
+    } catch (err: unknown) {
+      const status = (err as Error & { statusCode?: number }).statusCode;
+      if (status) {
+        res.status(status).json({ error: (err as Error).message });
+        return;
+      }
+      const mapped = mapAiError(err, String(customConfig?.model || provider || 'AI'));
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  });
+
   return app;
 }
