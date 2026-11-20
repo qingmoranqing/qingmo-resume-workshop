@@ -4607,5 +4607,40 @@ export function parseLinkedInProfileText(rawText: string): ResumeDoc {
   };
 }
 
+export interface PrunedHistoryStacks<T> {
+  past: T[];
+  future: T[];
+  pruned: boolean;
+}
+
+/**
+ * Bound combined undo (`past`) and redo (`future`) history stacks to the most recent
+ * `maxEntries` operations (default 50) to prevent unbounded memory growth during long sessions.
+ * Preserves original array references when already within budget so callers avoid needless renders.
+ */
+export function pruneHistoryStacks<T>(
+  past: T[],
+  future: T[],
+  maxEntries = 50,
+): PrunedHistoryStacks<T> {
+  const limit = Math.max(0, Math.floor(maxEntries));
+  if (past.length + future.length <= limit) {
+    return { past, future, pruned: false };
+  }
+  const nextPast = limit === 0 ? [] : past.length > limit ? past.slice(-limit) : past;
+  const remainingForFuture = Math.max(0, limit - nextPast.length);
+  const nextFuture =
+    remainingForFuture === 0
+      ? []
+      : future.length > remainingForFuture
+        ? future.slice(0, remainingForFuture)
+        : future;
+  return {
+    past: nextPast,
+    future: nextFuture,
+    pruned: nextPast !== past || nextFuture !== future,
+  };
+}
+
 
 

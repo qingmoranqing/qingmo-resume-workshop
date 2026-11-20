@@ -55,6 +55,7 @@ import {
   parsePlainTextResumeLocal,
   parseRange,
   preprocessJdText,
+  pruneHistoryStacks,
   resolveBaseFontWeight,
   resolveLineHeight,
   resolvePalette,
@@ -1355,6 +1356,42 @@ SQL · Python · Tableau · 产品规划
   assert.equal(zhDoc.data.education[0].school, '复旦大学');
   assert.ok(zhDoc.data.tags.includes('SQL'));
   assert.equal(zhDoc.meta.titles.experience, undefined);
+});
+
+test('pruneHistoryStacks preserves references within 50 operations and trims oldest past / farthest future when exceeded', () => {
+  const smallPast = Array.from({ length: 20 }, (_, i) => `p${i}`);
+  const smallFuture = Array.from({ length: 15 }, (_, i) => `f${i}`);
+  const withinBudget = pruneHistoryStacks(smallPast, smallFuture, 50);
+  assert.equal(withinBudget.pruned, false);
+  assert.equal(withinBudget.past, smallPast);
+  assert.equal(withinBudget.future, smallFuture);
+
+  const oversizedPast = Array.from({ length: 70 }, (_, i) => `p${i}`);
+  const extraFuture = ['f0', 'f1', 'f2'];
+  const pastTrimmed = pruneHistoryStacks(oversizedPast, extraFuture, 50);
+  assert.equal(pastTrimmed.pruned, true);
+  assert.equal(pastTrimmed.past.length, 50);
+  assert.equal(pastTrimmed.past[0], 'p20');
+  assert.equal(pastTrimmed.past[49], 'p69');
+  assert.equal(pastTrimmed.future.length, 0);
+
+  const combinedPast = Array.from({ length: 35 }, (_, i) => `p${i}`);
+  const combinedFuture = Array.from({ length: 30 }, (_, i) => `f${i}`);
+  const combinedTrimmed = pruneHistoryStacks(combinedPast, combinedFuture, 50);
+  assert.equal(combinedTrimmed.pruned, true);
+  assert.equal(combinedTrimmed.past.length, 35);
+  assert.equal(combinedTrimmed.future.length, 15);
+  assert.equal(combinedTrimmed.future[0], 'f0');
+  assert.equal(combinedTrimmed.future[14], 'f14');
+  assert.equal(combinedTrimmed.past.length + combinedTrimmed.future.length, 50);
+
+  const onlyFuture = Array.from({ length: 60 }, (_, i) => `f${i}`);
+  const futureTrimmed = pruneHistoryStacks([], onlyFuture, 50);
+  assert.equal(futureTrimmed.pruned, true);
+  assert.equal(futureTrimmed.past.length, 0);
+  assert.equal(futureTrimmed.future.length, 50);
+  assert.equal(futureTrimmed.future[0], 'f0');
+  assert.equal(futureTrimmed.future[49], 'f49');
 });
 
 

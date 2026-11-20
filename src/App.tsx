@@ -65,6 +65,7 @@ import {
   nid,
   normalizeMeta,
   normalizeStoredResumePayload,
+  pruneHistoryStacks,
   resolvePortableSyncDecision,
   runLocalAudit,
   runPdfExportPreflight,
@@ -75,7 +76,8 @@ import {
 const STORAGE_KEY = 'resume_studio_v5_data';
 const ONBOARDING_SEEN_KEY = 'resume_studio_onboarding_seen_v1';
 const BYOK_AI_CONFIG_KEY = 'resume_studio_byok_ai_config_v1';
-const MAX_HISTORY = 30;
+const MAX_HISTORY = 50;
+const HISTORY_PRUNE_INTERVAL_MS = 60_000;
 
 const DEFAULT_CUSTOM_AI: CustomAiConfig = {
   enabled: false,
@@ -266,6 +268,7 @@ export default function App() {
   }, []);
 
   // Persist to localStorage (and debounced to portable/desktop `resumes-data.json` when enabled)
+  // plus periodic history stack pruning (keeps at most the latest 50 operations across past/future)
   useEffect(() => {
     const payload: StoredResumePayload = { activeId: activeDoc.id, resumes };
     try {
@@ -278,13 +281,34 @@ export default function App() {
       }
     }
 
-    if (!portableDataFilePath || !portableSyncReadyRef.current) return;
-    portableDirtyRef.current = true;
-    const timer = window.setTimeout(() => {
-      portableDirtyRef.current = false;
-      void savePersistedResumeStore(payload).catch(() => {});
-    }, 350);
-    return () => window.clearTimeout(timer);
+    const pruneHistory = () => {
+      const pruned = pruneHistoryStacks(pastRef.current, futureRef.current, MAX_HISTORY);
+      if (!pruned.pruned) return;
+      pastRef.current = pruned.past;
+      futureRef.current = pruned.future;
+      setPast(pruned.past);
+      setFuture(pruned.future);
+    };
+
+    const historyPruneInterval = window.setInterval(pruneHistory, HISTORY_PRUNE_INTERVAL_MS);
+    const historyPruneAfterSaveTimer = window.setTimeout(pruneHistory, 2000);
+
+    let diskSaveTimer: number | null = null;
+    if (portableDataFilePath && portableSyncReadyRef.current) {
+      portableDirtyRef.current = true;
+      diskSaveTimer = window.setTimeout(() => {
+        portableDirtyRef.current = false;
+        void savePersistedResumeStore(payload).catch(() => {});
+      }, 350);
+    }
+
+    return () => {
+      window.clearInterval(historyPruneInterval);
+      window.clearTimeout(historyPruneAfterSaveTimer);
+      if (diskSaveTimer !== null) {
+        window.clearTimeout(diskSaveTimer);
+      }
+    };
   }, [resumes, activeDoc.id, notify, portableDataFilePath]);
 
   // Flush any pending debounced portable/desktop disk write if the user closes the window immediately after editing

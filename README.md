@@ -22,7 +22,7 @@
 
 ### 2. 12 大行业模板库与高效编辑工作流
 - **行业模板广场**：内置自动化/PLC、游戏策划、互联网研发与数据、销售外贸、财税金融、文科教培、行政法务、设计新媒体、医疗护理、建筑供应链、应届通用等 12 大行业模板，支持按关键词检索与「仅套用版式 / 新建简历」。
-- **双向联动编辑**：点击右侧 A4 简历画布任意区域直接定位至左侧对应编辑模块；支持自由拖拽/调整模块顺序、显隐控制、自定义扩展模块（标签 / 要点 / 标题段落 / STAR 案例 / 纯文本）以及撤销/重做历史栈（`Ctrl+Z` / `Ctrl+Shift+Z`、`Ctrl+P` 触发 PDF 预检）。
+- **双向联动编辑**：点击右侧 A4 简历画布任意区域直接定位至左侧对应编辑模块；支持自由拖拽/调整模块顺序、显隐控制、自定义扩展模块（标签 / 要点 / 标题段落 / STAR 案例 / 纯文本）以及撤销/重做历史栈（`Ctrl+Z` / `Ctrl+Shift+Z`，`Ctrl+P` 触发 PDF 预检；保留最近 50 次操作，并在自动保存周期内定时清理历史堆栈以防长时运行内存膨胀）。
 - **多版本管理体系**：
   - **版本克隆并衍生**：基于当前简历一键生成「针对性优化版」，自动记录原版本关联职位与派生谱系，便于多岗位投递对比。
   - **版本对比（Diff 视图）**：选择任意两份简历版本，按模块高亮展示文字增删、字数变化、量化指标数量对比与样式差异。
@@ -35,8 +35,8 @@
   - **本地离线引擎**：内置正则预处理清洗（乱码/HTML/全角符号）、同义词库映射、加权模糊匹配、原文高亮，以及交互式 `[×]` 删除误提词与 `+` 手动补充词条。
   - **LLM 增强引擎（需配置自有 API 或使用外部复制模式）**：支持调用你接入的大模型，或零配置「复制 Prompt / 粘贴 JSON」到任意外部网页端 AI，对 JD 硬性要求进行结构化分类提取（忽略软性套话），并基于简历真实工作/项目经历执行 **0–100 语义相关性打分**（附带经历佐证与补强建议）。
 - **工作经历 STAR 扩充**：根据填写的公司与岗位职责，一键生成 3 条符合 STAR 原则的补充经历建议并支持逐条插入。
-- **PDF 导出前置体检**：导出 PDF 前自动检查必填项、内容饱满度、示例占位符残留与重复条目，给出直观 UI 引导后再导出。
-- **多格式导出与导入**：支持 PDF（原生打印高保真导出）、Word（`.doc` HTML）、Markdown、纯文本、JSON 备份导入，以及原始纯文本简历粘贴解析。
+- **PDF 导出前置体检与双端直出**：Web 端导出 PDF 前自动检查必填项、内容饱满度、示例占位符残留与重复条目并引导浏览器打印导出；Electron 独立桌面版支持直接弹出系统保存框并静默生成零边距 A4 矢量 PDF。
+- **多格式导出与多源导入**：支持 PDF、Word（`.doc` HTML）、Markdown、纯文本、JSON 备份导入，以及**原始纯文本简历粘贴解析**与 **LinkedIn 档案一键导入**（支持中英文 LinkedIn 网页/导出 PDF 文本离线去噪解析，亦可选用已配置的 AI 接口精准抽取）。
 
 ---
 
@@ -93,11 +93,13 @@ AI_MODEL="deepseek-chat"
 
 ## 技术栈
 
-- **前端**：React 19 + TypeScript + Vite 8（按需懒加载与智能分包）+ Tailwind CSS v4 + Lucide React
-- **服务端**：Express + `tsx`（负责静态资源、AI 代理转发 `/api/ai/*`，以及便携版可选本地存储 `/api/local-store`）
-- **单文件打包**：Bun `--compile`（将前后端资源与品牌图标封装为单文件 `.exe`）
+- **前端**：React 19 + TypeScript + Vite 8（`base: './'` 兼容桌面端 `file://` 加载，按需懒加载与智能分包）+ Tailwind CSS v4 + Lucide React
+- **服务端**：Express + `tsx`（负责 Web/自托管静态资源、AI 代理转发 `/api/ai/*`，以及 Bun 便携版可选本地存储 `/api/local-store`）
+- **桌面端打包（双形态）**：
+  - **Electron 独立桌面便携版（无黑框）**：`electron/*.cjs` + `electron-builder.yml`（通过 IPC 直接落盘 `resumes-data.json` 与 `printToPDF` 零边距直出 PDF；`electron` 与 `electron-builder` 仅在 CI 打包阶段临时安装，不写入根目录 `package.json` 依赖）
+  - **Bun 单文件便携版**：`bun build --compile`（内嵌 Express 服务端与前端资源，适合需要本地 `/api/ai/*` 代理的便携使用）
 - **测试**：Node.js 原生测试运行器（`node:test` + `tsx`）
-- **数据持久化**：Web 模式存储在浏览器 `localStorage`；便携版 `.exe` 额外自动落盘至本地 `resumes-data.json`
+- **数据持久化**：Web 模式存储在浏览器 `localStorage`；Electron 桌面版与 Bun 便携版均自动落盘至 `.exe` 同级目录 `resumes-data.json`
 
 ---
 
@@ -132,9 +134,26 @@ npm run build
 npm start
 ```
 
-### 5. 打包免安装单文件一体包（Windows `.exe`）
+### 5. 打包 Windows 便携版 `.exe`（提供两种形态）
 
-支持将前后端全部资源与品牌图标内嵌编译为**单个独立可执行文件**（无需安装 Node.js、无需额外 `dist/` 目录，双击自动启动本地服务并弹出默认浏览器，端口冲突自动避让）：
+#### 5.1 Electron 无黑框独立桌面版（推荐 · 离线编辑与高清 PDF 直出）
+基于 Electron 独立窗口直接加载 `dist/index.html`，**无命令行黑框、不启动 3000 端口本地服务**：
+- **便携数据落盘**：优先读取 `PORTABLE_EXECUTABLE_DIR`（未设置时回退到打包后 `.exe` 所在目录或当前工作目录），保证单文件便携 `.exe` 始终在真实同级目录读写 `resumes-data.json`（兼容 `version / updatedAt / activeId / resumes`），绝不写入系统临时文件夹。
+- **高清零边距 PDF 直出**：点击「导出 PDF」直接弹出系统保存对话框，调用 Electron `printToPDF` 静默输出 A4 零边距矢量 PDF（无需配置浏览器打印选项）。
+- **外链安全打开 & 单实例锁**：点击外部链接自动调用系统默认浏览器打开；重复双击自动唤起已有窗口。
+- **GitHub Actions 云端自动构建（推荐）**：仓库已内置 `.github/workflows/build-desktop.yml`：
+  - 手动触发：在 GitHub 仓库 **Actions → Build Electron Desktop App (Windows Portable .exe) → Run workflow** 点击运行（可填可选版本号），构建完成后直接从 Artifacts 下载 `ResumeCraft-win-x64.exe`；
+  - 标签自动发版：推送 `v*` 标签（如 `git tag v1.1.0 && git push origin v1.1.0`），自动打包并创建 GitHub Release 挂载 `ResumeCraft-win-x64.exe`。
+- **说明**：为保护在线预览沙盒与纯 Web 开发环境不被大型二进制包卡死，`electron` 与 `electron-builder` **未写入**根目录 `package.json` 依赖，仅在云端 CI 打包步骤中临时安装。若需在本机 Windows 手动打包，可依次执行：
+  ```bash
+  npm run build
+  npm install --no-save electron electron-builder
+  npx electron-builder --win portable --config electron-builder.yml
+  # 生成产物：release/ResumeCraft-win-x64.exe
+  ```
+
+#### 5.2 Bun 轻量单文件便携版（自带本地服务与 AI 代理）
+如果你希望在单文件 `.exe` 中保留本地 Express 服务端（以便通过 `.exe` 同级 `.env` 预设 AI Key 并经由 `/api/ai/*` 代理规避跨域），可使用 Bun 单文件方案（双击自动启动本地服务并打开默认浏览器，端口冲突自动避让）：
 
 ```bash
 # 本地打包 Windows x64 单文件 .exe（需安装 Bun）
@@ -145,9 +164,8 @@ bun run build:exe
 - **本地文件自动持久化（不怕清缓存/换端口）**：便携版启动后会自动在 `.exe` 同级目录创建并同步 `resumes-data.json`（若所在目录只读，则自动回退到用户目录 `~/.resume-craft/resumes-data.json`）；可在右上角「设置 → 本地数据与隐私」查看当前同步路径。将 `.exe` 与 `resumes-data.json` 一并拷贝到 U 盘或新电脑即可无损迁移。
 - **防重复启动（单实例守卫）**：如果服务已在后台运行，再次双击 `.exe` 会自动检测到已有实例并直接打开对应网页，不会重复启动多个后台进程。
 - **配置 AI 接口**：可在 `.exe` 同级目录放一份 `.env` 文件，或直接在右上角「设置（`SettingsModal`）」中填写自有接口与 Key。
-- **GitHub 自动发版与 SHA256 校验（推荐）**：仓库已内置 `.github/workflows/build-exe.yml`：
-  - 在 GitHub 仓库的 **Actions → Build Standalone Executable (.exe) → Run workflow** 点击运行，约 1 分钟即可同时下载 `ResumeCraft-win-x64.exe` 与 `SHA256SUMS.txt`；
-  - 或本地推送版本号标签（如 `git tag v1.0.0 && git push origin v1.0.0`），GitHub 将自动打包并发布到 **Releases**；
+- **GitHub 自动发版与 SHA256 校验**：仓库同时保留 `.github/workflows/build-exe.yml`：
+  - 在 GitHub 仓库的 **Actions → Build Standalone Executable (.exe) → Run workflow** 点击运行，即可下载 `ResumeCraft-win-x64.exe` 与 `SHA256SUMS.txt`；
   - **Windows SmartScreen 说明**：开源项目未购买商业代码签名证书，首次双击若出现系统安全提示，点击 **「更多信息 → 仍要运行」** 即可（也可先对照 `SHA256SUMS.txt` 校验文件哈希）。
 
 ### 6. 类型检查与单元测试
@@ -156,8 +174,8 @@ bun run build:exe
 # TypeScript 类型检查
 npm run lint
 
-# 运行全部核心逻辑单元测试
-npx tsx --test src/utils/bilingual.test.ts src/utils/competitiveness.test.ts src/utils/resumeLogic.test.ts src/utils/versionDiff.test.ts
+# 运行全部核心逻辑单元测试（含双语、竞争力雷达、桌面端桥接、核心逻辑与版本对比）
+npx tsx --test src/utils/bilingual.test.ts src/utils/competitiveness.test.ts src/utils/desktopBridge.test.ts src/utils/resumeLogic.test.ts src/utils/versionDiff.test.ts
 ```
 
 ---
@@ -212,50 +230,65 @@ npx tsx --test src/utils/bilingual.test.ts src/utils/competitiveness.test.ts src
   $env:RESUME_CRAFT_ALLOW_MULTI="1"; .\ResumeCraft-win-x64.exe
   ```
 
+### 7. Electron 桌面版打包常见说明（防白屏、依赖隔离与无签名构建）
+- **为什么 `package.json` 中没有 `electron` 和 `electron-builder`？**：这是刻意设计，避免在在线预览沙盒或常规 Web 开发执行 `npm install` 时下载数百 MB 的 Electron 二进制导致超时卡死。`.github/workflows/build-desktop.yml` 会在 `windows-latest` 构建机上按需临时安装它们并完成打包。
+- **Electron 加载 `dist/index.html` 白屏排查**：确认 `vite.config.ts` 已配置 `base: './'`，且 `dist/index.html` 中引用的脚本与样式表路径均为 `./assets/...`（而非 `/assets/...`）。
+- **Windows Runner 报 `winCodeSign` 符号链接解压错误**：`electron-builder.yml` 已显式配置 `win.signAndEditExecutable: false`，跳过需要 Windows 开发者模式权限的签名工具解压步骤；同时工作流会自动检测 `package-lock.json` 是否存在，无锁文件时平滑回退至 `npm install`。
+
 ---
 
 ## 目录结构
 
 ```text
 .
-├── server.ts                            # 开发与生产 Web 入口（挂载 Express 与 Vite）
-├── serverApp.ts                         # Express API 路由（/api/health、/api/ai/*、便携版 /api/local-store）
-├── index.html                           # 应用入口与离线安全异步字体加载配置
-├── .env.example                         # 自托管环境变量配置模板
-├── .github/workflows/build-exe.yml      # GitHub Actions 自动构建 Windows .exe 与 SHA256 发版流水线
+├── server.ts                              # 开发与生产 Web 入口（挂载 Express 与 Vite）
+├── serverApp.ts                           # Express API 路由（/api/health、/api/ai/*、便携版 /api/local-store）
+├── index.html                             # 应用入口与离线安全异步字体加载配置
+├── vite.config.ts                         # Vite 构建配置（含 base: './' 桌面端兼容与智能分包）
+├── electron-builder.yml                   # Electron Windows 便携单文件（portable .exe）打包配置
+├── .env.example                           # 自托管环境变量配置模板
+├── .github/workflows/
+│   ├── build-desktop.yml                  # GitHub Actions Electron 无黑框便携版自动打包与发版流水线
+│   └── build-exe.yml                      # GitHub Actions Bun 单文件便携版与 SHA256 发版流水线
+├── electron/
+│   ├── main.cjs                           # Electron 主进程（独立窗口、外链拦截、IPC 落盘与 printToPDF）
+│   ├── preload.cjs                        # contextBridge 安全桥接脚本（暴露 window.electronAPI）
+│   └── portableStore.cjs                  # 便携数据目录解析、原子读写 resumes-data.json 与 PDF 文件名清理
 ├── scripts/
-│   ├── build-exe.ts                     # Bun 单文件便携包构建脚本（内嵌 dist/ 与图标）
-│   ├── exe-entry.ts                     # 便携版入口（单实例守卫、本地 JSON 持久化、自动开浏览器）
-│   ├── embeddedAssets.ts                # 打包期临时内嵌前端资源的干净类型占位文件
-│   └── assets/app-icon.ico              # Windows 便携版多分辨率品牌图标
+│   ├── build-exe.ts                       # Bun 单文件便携包构建脚本（内嵌 dist/ 与图标）
+│   ├── exe-entry.ts                       # Bun 便携版入口（单实例守卫、本地 JSON 持久化、自动开浏览器）
+│   ├── embeddedAssets.ts                  # 打包期临时内嵌前端资源的干净类型占位文件
+│   └── assets/app-icon.ico                # Windows 便携版多分辨率品牌图标
 └── src/
-    ├── App.tsx                          # 主应用状态管理、按需懒加载弹窗、快捷键与历史栈
-    ├── index.css                        # 全局样式、A4 简历排版、多页防断行与黑白打印省墨样式
-    ├── types/resume.ts                  # 简历文档、排版、体检与 AI 类型定义
+    ├── App.tsx                            # 主应用状态管理、双端持久化、定时历史栈清理（50 步）、快捷键与懒加载
+    ├── index.css                          # 全局样式、A4 简历排版、多页防断行与黑白打印省墨样式
+    ├── types/resume.ts                    # 简历文档、排版、体检与 AI 类型定义
     ├── data/
-    │   ├── defaultResumes.ts            # 初始示例简历
-    │   ├── templateLibrary.ts           # 12 大行业模板库（独立分包按需加载）
-    │   ├── themes.ts                    # 8 大版式与 10 套主题色定义
-    │   └── writingLibrary.ts            # 6 大行业写作参考词库
+    │   ├── defaultResumes.ts              # 初始示例简历
+    │   ├── templateLibrary.ts             # 12 大行业模板库（独立分包按需加载）
+    │   ├── themes.ts                      # 8 大版式与 10 套主题色定义
+    │   └── writingLibrary.ts              # 6 大行业写作参考词库
     ├── utils/
-    │   ├── resumeLogic.ts               # 简历解析、本地审计、PDF 预检、导出、便携持久化与配置校验
-    │   ├── competitiveness.ts           # 四维竞争力雷达评分引擎
-    │   ├── versionDiff.ts               # 多版本内容与样式差异比对引擎
-    │   ├── bilingual.ts                 # 中英双语识别、翻译结构映射与回退
-    │   └── *.test.ts                    # 核心纯函数单元测试套件
+    │   ├── resumeLogic.ts                 # 简历/LinkedIn 解析、本地审计、PDF 预检、历史裁剪、导出与配置校验
+    │   ├── desktopBridge.ts               # Electron / Web 双端存储与 PDF 导出无感适配层
+    │   ├── competitiveness.ts             # 四维竞争力雷达评分引擎
+    │   ├── versionDiff.ts                 # 多版本内容与样式差异比对引擎
+    │   ├── bilingual.ts                   # 中英双语识别、翻译结构映射与回退
+    │   └── *.test.ts                      # 核心纯函数单元测试套件（54 项）
     └── components/
-        ├── TopBar.tsx                   # 顶部导航、模式切换与多格式导出
-        ├── LeftWorkbench.tsx            # 左侧 5 模式工作台容器（次级页签懒加载）
-        ├── LeftWorkbenchVersionBar.tsx  # 版本切换、克隆衍生与中英双语切换条
-        ├── ContentEditor.tsx            # 简历内容表单与 STAR 扩充入口
-        ├── DesignPanel.tsx              # 版式、主题、字号/字重/行高/边距调节
-        ├── AuditPanel.tsx               # 本地体检、JD 扫描与 AI 体检面板
-        ├── HelperPanel.tsx              # 跨岗重构与投递助手面板
-        ├── VersionComparePanel.tsx      # 版本差异对比面板
-        ├── ResumeCanvas.tsx             # 右侧实时 A4 简历画布、分页参考线与底部工具栏
-        ├── CompetitivenessRadarPanel.tsx# 右侧四维竞争力雷达图面板
-        ├── SettingsModal.tsx            # 应用设置弹窗（BYOK AI 接口配置与本地隐私/落盘状态）
-        └── *Modal.tsx                   # 模板广场、PDF 导出预检、导入与新手引导弹窗
+        ├── TopBar.tsx                     # 顶部导航、版本管理、模式切换与多格式导出
+        ├── LeftWorkbench.tsx              # 左侧 5 模式工作台容器（次级页签懒加载）
+        ├── LeftWorkbenchVersionBar.tsx    # 版本切换、克隆衍生与中英双语切换条
+        ├── ContentEditor.tsx              # 简历内容表单与 STAR 扩充入口
+        ├── DesignPanel.tsx                # 版式、主题、字号/字重/行高/边距调节
+        ├── AuditPanel.tsx                 # 本地体检、JD 扫描与 AI 体检面板
+        ├── HelperPanel.tsx                # 跨岗重构与投递助手面板
+        ├── VersionComparePanel.tsx        # 版本差异对比面板
+        ├── ResumeCanvas.tsx               # 右侧实时 A4 简历画布、分页参考线与底部工具栏
+        ├── CompetitivenessRadarPanel.tsx  # 右侧四维竞争力雷达图面板
+        ├── SettingsModal.tsx              # 应用设置弹窗（BYOK AI 接口配置与本地隐私/落盘状态）
+        ├── LinkedInImportModal.tsx        # LinkedIn 档案一键导入弹窗（离线去噪 + 可选 AI 精准解析）
+        └── *Modal.tsx                     # 模板广场、PDF 导出预检、纯文本导入与新手引导弹窗
 ```
 
 ---
