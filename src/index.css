@@ -2,8 +2,8 @@
 
 @layer base {
   :root {
-    --studio-font: "Plus Jakarta Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-    --studio-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --studio-font: "Plus Jakarta Sans", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, sans-serif;
+    --studio-mono: "IBM Plex Mono", "Cascadia Mono", "Consolas", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
   html,
@@ -40,7 +40,7 @@
   box-shadow:
     0 1px 2px rgba(15, 23, 42, 0.06),
     0 12px 32px rgba(15, 23, 42, 0.08);
-  font-family: "Noto Sans SC", "Plus Jakarta Sans", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: "Noto Sans SC", "Plus Jakarta Sans", "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", -apple-system, sans-serif;
   font-size: var(--r-fs, 12px);
   font-weight: var(--r-fw-base, 400);
   --r-fw-medium: clamp(300, calc(var(--r-fw-base, 400) + 100), 800);
@@ -67,15 +67,41 @@
 .a4-paper.font-serif .r-name,
 .a4-paper.font-serif .r-sec-title,
 .a4-paper.font-serif .r-side-title {
-  font-family: "Noto Serif SC", "Songti SC", Georgia, serif;
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", Georgia, serif;
   letter-spacing: 0.04em;
 }
 .a4-paper.font-classic {
-  font-family: "Noto Serif SC", "Songti SC", "SimSun", Georgia, serif;
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "NSimSun", "SimSun", Georgia, serif;
 }
 .a4-paper.font-classic .r-name,
 .a4-paper.font-classic .r-sec-title {
   letter-spacing: 0.06em;
+}
+
+/* Screen-only visual A4 page-break guide when multi-page mode is active */
+.a4-page-break-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 15;
+  pointer-events: none;
+  border-top: 1.5px dashed rgba(37, 99, 235, 0.55);
+  display: flex;
+  justify-content: flex-end;
+}
+.a4-page-break-badge {
+  transform: translateY(-50%);
+  margin-right: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(239, 246, 255, 0.96);
+  border: 1px solid rgba(147, 197, 253, 0.9);
+  color: #1d4ed8;
+  font-family: var(--studio-font);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
 }
 
 .a4-inner {
@@ -833,7 +859,7 @@
   background: transparent;
 }
 .r-kpi-num {
-  font-family: "Plus Jakarta Sans", "Noto Sans SC", -apple-system, sans-serif;
+  font-family: "Plus Jakarta Sans", "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif;
   font-variant-numeric: tabular-nums;
   font-weight: var(--r-fw-bold, 700);
   font-size: 1.06em;
@@ -1096,5 +1122,20 @@
   }
   .r-hit-tip {
     display: none !important;
+  }
+  /* Multi-page PDF pagination protection: avoid orphan headings or mid-card splits */
+  .r-sec-head,
+  .r-side-title {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .r-exp-item,
+  .r-edu-item,
+  .r-case-card,
+  .r-kpi-strip,
+  .r-skill-row,
+  .r-eval-item {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }

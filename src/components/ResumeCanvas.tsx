@@ -757,8 +757,9 @@ export function ResumeCanvas({
     );
   };
 
+  const effectivePages = !meta.autofit && pageCount > 1 ? pageCount : 1;
   const scaledWidth = Math.round(794 * effectiveScale);
-  const scaledHeight = Math.round(1123 * effectiveScale);
+  const scaledHeight = Math.round(1123 * effectivePages * effectiveScale);
 
   return (
     <div className="print-canvas-host flex min-w-0 flex-1 flex-col overflow-hidden bg-[#e8edf3]">
@@ -798,6 +799,24 @@ export function ResumeCanvas({
               >
                 {renderTemplate()}
               </div>
+              {!meta.autofit &&
+                pageCount > 1 &&
+                Array.from({ length: pageCount - 1 }, (_, idx) => {
+                  const breakIdx = idx + 1;
+                  return (
+                    <div
+                      key={breakIdx}
+                      data-testid="a4-page-break-guide"
+                      className="no-print a4-page-break-line"
+                      style={{ top: `${breakIdx * 1123}px` }}
+                      aria-hidden="true"
+                    >
+                      <span className="a4-page-break-badge">
+                        第 {breakIdx} / {pageCount} 页 A4 分页线（打印时自动避开断行）
+                      </span>
+                    </div>
+                  );
+                })}
             </div>
           </div>
         </div>

@@ -1,14 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CompetitivenessRadarPanel } from './components/CompetitivenessRadarPanel';
 import { LeftWorkbench } from './components/LeftWorkbench';
 import { ModalDialog, type ModalConfig } from './components/ModalDialog';
-import { OnboardingGuideModal } from './components/OnboardingGuideModal';
-import { PdfPreflightModal } from './components/PdfPreflightModal';
 import { ResumeCanvas } from './components/ResumeCanvas';
-import { ResumeImportModal } from './components/ResumeImportModal';
-import { SettingsModal } from './components/SettingsModal';
-import { TemplateGalleryModal } from './components/TemplateGalleryModal';
 import { TopBar } from './components/TopBar';
+
+const OnboardingGuideModal = lazy(() =>
+  import('./components/OnboardingGuideModal').then((m) => ({ default: m.OnboardingGuideModal })),
+);
+const PdfPreflightModal = lazy(() =>
+  import('./components/PdfPreflightModal').then((m) => ({ default: m.PdfPreflightModal })),
+);
+const ResumeImportModal = lazy(() =>
+  import('./components/ResumeImportModal').then((m) => ({ default: m.ResumeImportModal })),
+);
+const SettingsModal = lazy(() =>
+  import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })),
+);
+const TemplateGalleryModal = lazy(() =>
+  import('./components/TemplateGalleryModal').then((m) => ({ default: m.TemplateGalleryModal })),
+);
 import { DEFAULT_RESUMES } from './data/defaultResumes';
 import {
   applyEnglishTranslation,
@@ -43,8 +54,6 @@ import {
   maskPhone,
   mergeImportedResumes,
   nid,
-  normalizeData,
-  normalizeLineage,
   normalizeMeta,
   normalizeStoredResumePayload,
   resolvePortableSyncDecision,
@@ -209,6 +218,7 @@ export default function App() {
   const quotaWarnedRef = useRef<boolean>(false);
   const [portableDataFilePath, setPortableDataFilePath] = useState<string | null>(null);
   const portableSyncReadyRef = useRef<boolean>(false);
+  const portableDirtyRef = useRef<boolean>(false);
 
   const pushHistorySnapshot = useCallback((snapshot: ResumeDoc[]) => {
     setPast((p) => [...p.slice(-(MAX_HISTORY - 1)), snapshot.map(cloneResumeDoc)]);
@@ -262,7 +272,9 @@ export default function App() {
     }
 
     if (!portableDataFilePath || !portableSyncReadyRef.current) return;
+    portableDirtyRef.current = true;
     const timer = window.setTimeout(() => {
+      portableDirtyRef.current = false;
       void fetch('/api/local-store', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -271,6 +283,31 @@ export default function App() {
     }, 350);
     return () => window.clearTimeout(timer);
   }, [resumes, activeDoc.id, notify, portableDataFilePath]);
+
+  // Flush any pending debounced portable disk write if the user closes the tab immediately after editing
+  useEffect(() => {
+    if (!portableDataFilePath) return;
+    const flushPending = () => {
+      if (!portableSyncReadyRef.current || !portableDirtyRef.current) return;
+      portableDirtyRef.current = false;
+      const payload: StoredResumePayload = {
+        activeId: activeIdRef.current,
+        resumes: resumesRef.current,
+      };
+      void fetch('/api/local-store', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => {});
+    };
+    window.addEventListener('pagehide', flushPending);
+    window.addEventListener('beforeunload', flushPending);
+    return () => {
+      window.removeEventListener('pagehide', flushPending);
+      window.removeEventListener('beforeunload', flushPending);
+    };
+  }, [portableDataFilePath]);
 
   // Validate and persist browser BYOK AI config to localStorage, enabling zero-restart dynamic model switching
   const customAiConfigRef = useRef<CustomAiConfig>(customAiConfig);
@@ -475,7 +512,7 @@ export default function App() {
     notify('已重做操作');
   }, [notify]);
 
-  // Global keyboard shortcuts (Ctrl+Z / Ctrl+Shift+Z / Esc)
+  // Global keyboard shortcuts (Ctrl+Z / Ctrl+Shift+Z / Ctrl+P / Esc)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -486,6 +523,10 @@ export default function App() {
         e.preventDefault();
         if (e.shiftKey) handleRedo();
         else handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        setToast(null);
+        setPdfPreflightOpen(true);
       } else if (e.key === 'Escape') {
         if (modal) setModal(null);
         else if (pdfPreflightOpen) setPdfPreflightOpen(false);
@@ -1067,54 +1108,66 @@ export default function App() {
         />
       </div>
 
-      <TemplateGalleryModal
-        open={templateGalleryOpen}
-        onClose={() => setTemplateGalleryOpen(false)}
-        onUseAsNewResume={handleUseTemplateAsNew}
-        onApplyStyleOnly={handleApplyTemplateStyleOnly}
-        onCreateCustomRole={handleCreateCustomRole}
-      />
+      <Suspense fallback={null}>
+        {templateGalleryOpen && (
+          <TemplateGalleryModal
+            open={templateGalleryOpen}
+            onClose={() => setTemplateGalleryOpen(false)}
+            onUseAsNewResume={handleUseTemplateAsNew}
+            onApplyStyleOnly={handleApplyTemplateStyleOnly}
+            onCreateCustomRole={handleCreateCustomRole}
+          />
+        )}
 
-      <ResumeImportModal
-        open={importModalOpen}
-        providers={providers}
-        selectedProvider={selectedProvider}
-        customConfig={customAiConfig}
-        onClose={() => setImportModalOpen(false)}
-        onImportDoc={handleImportParsedDoc}
-      />
+        {importModalOpen && (
+          <ResumeImportModal
+            open={importModalOpen}
+            providers={providers}
+            selectedProvider={selectedProvider}
+            customConfig={customAiConfig}
+            onClose={() => setImportModalOpen(false)}
+            onImportDoc={handleImportParsedDoc}
+          />
+        )}
 
-      <OnboardingGuideModal
-        open={guideOpen}
-        onDismiss={handleDismissGuide}
-        onOpenTemplateGallery={() => {
-          handleDismissGuide();
-          setTemplateGalleryOpen(true);
-        }}
-      />
+        {guideOpen && (
+          <OnboardingGuideModal
+            open={guideOpen}
+            onDismiss={handleDismissGuide}
+            onOpenTemplateGallery={() => {
+              handleDismissGuide();
+              setTemplateGalleryOpen(true);
+            }}
+          />
+        )}
 
-      <SettingsModal
-        open={settingsOpen}
-        providers={providers}
-        customConfig={customAiConfig}
-        resumeCount={resumes.length}
-        portableDataFilePath={portableDataFilePath}
-        onClose={() => setSettingsOpen(false)}
-        onSaveCustomConfig={handleSaveCustomAiConfig}
-        onClearCustomConfig={handleClearCustomAiConfig}
-        onExportBackup={handleExportJson}
-        onOpenGuide={() => setGuideOpen(true)}
-        onNotify={notify}
-      />
+        {settingsOpen && (
+          <SettingsModal
+            open={settingsOpen}
+            providers={providers}
+            customConfig={customAiConfig}
+            resumeCount={resumes.length}
+            portableDataFilePath={portableDataFilePath}
+            onClose={() => setSettingsOpen(false)}
+            onSaveCustomConfig={handleSaveCustomAiConfig}
+            onClearCustomConfig={handleClearCustomAiConfig}
+            onExportBackup={handleExportJson}
+            onOpenGuide={() => setGuideOpen(true)}
+            onNotify={notify}
+          />
+        )}
 
-      <PdfPreflightModal
-        open={pdfPreflightOpen}
-        report={pdfPreflightReport}
-        pdfTitle={buildPdfTitle(activeDoc)}
-        onClose={() => setPdfPreflightOpen(false)}
-        onFixModule={handleFixFromPreflight}
-        onProceedExport={handleProceedPdfPrint}
-      />
+        {pdfPreflightOpen && (
+          <PdfPreflightModal
+            open={pdfPreflightOpen}
+            report={pdfPreflightReport}
+            pdfTitle={buildPdfTitle(activeDoc)}
+            onClose={() => setPdfPreflightOpen(false)}
+            onFixModule={handleFixFromPreflight}
+            onProceedExport={handleProceedPdfPrint}
+          />
+        )}
+      </Suspense>
 
       <ModalDialog config={modal} onClose={() => setModal(null)} />
 

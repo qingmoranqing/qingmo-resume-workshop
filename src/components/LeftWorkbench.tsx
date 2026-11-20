@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { X } from 'lucide-react';
 import type {
   AiConfigSaveResult,
@@ -10,12 +11,31 @@ import type {
   TranslatedResumePayload,
   WorkbenchTab,
 } from '../types/resume';
-import { AuditPanel } from './AuditPanel';
 import { ContentEditor } from './ContentEditor';
-import { DesignPanel } from './DesignPanel';
-import { HelperPanel } from './HelperPanel';
 import { LeftWorkbenchVersionBar } from './LeftWorkbenchVersionBar';
-import { VersionComparePanel } from './VersionComparePanel';
+
+const DesignPanel = lazy(() =>
+  import('./DesignPanel').then((m) => ({ default: m.DesignPanel })),
+);
+const AuditPanel = lazy(() =>
+  import('./AuditPanel').then((m) => ({ default: m.AuditPanel })),
+);
+const HelperPanel = lazy(() =>
+  import('./HelperPanel').then((m) => ({ default: m.HelperPanel })),
+);
+const VersionComparePanel = lazy(() =>
+  import('./VersionComparePanel').then((m) => ({ default: m.VersionComparePanel })),
+);
+
+function WorkbenchTabFallback() {
+  return (
+    <div className="space-y-3 py-4" aria-busy="true">
+      <div className="h-4 w-32 animate-pulse rounded bg-slate-200/80" />
+      <div className="h-20 animate-pulse rounded-lg bg-slate-100" />
+      <div className="h-24 animate-pulse rounded-lg bg-slate-100" />
+    </div>
+  );
+}
 
 interface LeftWorkbenchProps {
   open: boolean;
@@ -182,59 +202,63 @@ export function LeftWorkbench({
             />
           )}
 
-          {activeTab === 'design' && (
-            <DesignPanel
-              doc={doc}
-              onMutate={onMutate}
-              onSelectModuleAndEdit={(modKey) => {
-                onSelectModule(modKey);
-                onChangeTab('content');
-              }}
-            />
-          )}
+          {activeTab !== 'content' && (
+            <Suspense fallback={<WorkbenchTabFallback />}>
+              {activeTab === 'design' && (
+                <DesignPanel
+                  doc={doc}
+                  onMutate={onMutate}
+                  onSelectModuleAndEdit={(modKey) => {
+                    onSelectModule(modKey);
+                    onChangeTab('content');
+                  }}
+                />
+              )}
 
-          {activeTab === 'audit' && (
-            <AuditPanel
-              doc={doc}
-              localChecks={localChecks}
-              providers={providers}
-              selectedProvider={selectedProvider}
-              onSelectProvider={onSelectProvider}
-              customConfig={customConfig}
-              onSaveCustomConfig={onSaveCustomConfig}
-              onClearCustomConfig={onClearCustomConfig}
-              onOpenSettings={onOpenSettings}
-              onMutate={onMutate}
-              onJumpToModule={onJumpFromAudit}
-              onNotify={onNotify}
-            />
-          )}
+              {activeTab === 'audit' && (
+                <AuditPanel
+                  doc={doc}
+                  localChecks={localChecks}
+                  providers={providers}
+                  selectedProvider={selectedProvider}
+                  onSelectProvider={onSelectProvider}
+                  customConfig={customConfig}
+                  onSaveCustomConfig={onSaveCustomConfig}
+                  onClearCustomConfig={onClearCustomConfig}
+                  onOpenSettings={onOpenSettings}
+                  onMutate={onMutate}
+                  onJumpToModule={onJumpFromAudit}
+                  onNotify={onNotify}
+                />
+              )}
 
-          {activeTab === 'helper' && (
-            <HelperPanel
-              doc={doc}
-              providers={providers}
-              selectedProvider={selectedProvider}
-              onSelectProvider={onSelectProvider}
-              customConfig={customConfig}
-              onSaveCustomConfig={onSaveCustomConfig}
-              onClearCustomConfig={onClearCustomConfig}
-              onOpenSettings={onOpenSettings}
-              onMutate={onMutate}
-              onApplyTailorProposal={onApplyTailorProposal}
-              onNotify={onNotify}
-            />
-          )}
+              {activeTab === 'helper' && (
+                <HelperPanel
+                  doc={doc}
+                  providers={providers}
+                  selectedProvider={selectedProvider}
+                  onSelectProvider={onSelectProvider}
+                  customConfig={customConfig}
+                  onSaveCustomConfig={onSaveCustomConfig}
+                  onClearCustomConfig={onClearCustomConfig}
+                  onOpenSettings={onOpenSettings}
+                  onMutate={onMutate}
+                  onApplyTailorProposal={onApplyTailorProposal}
+                  onNotify={onNotify}
+                />
+              )}
 
-          {activeTab === 'compare' && (
-            <VersionComparePanel
-              resumes={resumes}
-              activeId={doc.id}
-              preferredPair={comparePair}
-              onSelectResume={onSelectResume}
-              onDuplicateResume={onDuplicateResume}
-              onJumpToModule={onJumpFromAudit}
-            />
+              {activeTab === 'compare' && (
+                <VersionComparePanel
+                  resumes={resumes}
+                  activeId={doc.id}
+                  preferredPair={comparePair}
+                  onSelectResume={onSelectResume}
+                  onDuplicateResume={onDuplicateResume}
+                  onJumpToModule={onJumpFromAudit}
+                />
+              )}
+            </Suspense>
           )}
         </div>
       </aside>
