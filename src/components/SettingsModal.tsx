@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Server,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -483,7 +484,7 @@ export function SettingsModal({
                         </p>
                       ) : (
                         <p className="mt-1 text-[11px] text-slate-600">
-                          填写任意 OpenAI 兼容或 Anthropic Claude 接口的 Base URL、API Key 与自定义 Model ID，保存后全站「简历体检 / 换岗改写 / 单条润色 / 旧简历解析」立即生效。
+                          本项目不内置大模型或 API 额度。填写任意 OpenAI 兼容或 Anthropic Claude 接口的 Base URL、你自己的 API Key 与 Model ID，保存后全站「简历体检 / 换岗改写 / 语义打分 / 旧简历解析」立即生效。
                         </p>
                       )}
                     </div>
@@ -492,11 +493,27 @@ export function SettingsModal({
 
                 {/* Quick Presets */}
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-slate-800">
-                      1. 快速填入常用服务商（也可直接手填任意中转站）
+                      1. 快捷填入常用接口地址模板（仅填 URL/模型名，需自备 Key）
                     </span>
-                    <span className="text-[11px] text-slate-400">支持 OneAPI / NewAPI / Ollama</span>
+                    <span className="relative group inline-flex items-center">
+                      <button
+                        type="button"
+                        aria-label="模型接口网络连通性与中转站安全说明"
+                        title="请确保你的本地网络环境能够访问该模型接口。如果选择中转站，请自行甄别安全性。"
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-amber-700 hover:bg-amber-50 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                      >
+                        <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+                        <span>网络与中转站安全提示</span>
+                      </button>
+                      <span
+                        role="tooltip"
+                        className="pointer-events-none absolute right-0 bottom-full z-30 mb-1.5 w-72 rounded-lg border border-amber-200 bg-slate-900 px-3 py-2 text-[11px] leading-relaxed text-white shadow-lg opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                      >
+                        快捷模板仅自动填入服务商 Base URL 与默认 Model ID，项目本身不内置大模型和 Key。请确保你的本地网络环境能够访问该模型接口。如果选择中转站，请自行甄别安全性。
+                      </span>
+                    </span>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                     {AI_PRESETS.map((preset) => {
@@ -507,6 +524,7 @@ export function SettingsModal({
                         <button
                           key={preset.label}
                           type="button"
+                          title={`仅填入 ${preset.label} 接口地址与推荐模型名（不含 API Key）。请确保你的本地网络环境能够访问该模型接口。如果选择中转站，请自行甄别安全性。`}
                           onClick={() => {
                             updateDraft({
                               protocol: preset.protocol,
@@ -532,6 +550,16 @@ export function SettingsModal({
                         </button>
                       );
                     })}
+                  </div>
+                  <div
+                    data-testid="settings-ai-safety-notice"
+                    className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/75 px-3 py-2 text-[11px] leading-relaxed text-amber-900"
+                  >
+                    <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                    <span>
+                      <strong>安全与网络提示：</strong>
+                      上方快捷按钮仅自动填充对应平台的 Base URL 与默认模型名，本项目不内置大模型或官方 Key。请确保你的本地网络环境能够访问该模型接口。如果选择中转站，请自行甄别安全性。
+                    </span>
                   </div>
                 </div>
 

@@ -12,6 +12,7 @@ import {
   Server,
   Settings,
   Settings2,
+  ShieldAlert,
   ShieldCheck,
   Terminal,
   Trash2,
@@ -246,9 +247,12 @@ export function AiProviderSelector({
     <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2.5">
       {/* Header Status Row */}
       <div className="flex items-center justify-between gap-2">
-        <span className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-900 min-w-0 truncate">
+        <span
+          className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-900 min-w-0 truncate"
+          title="本项目不内置大模型与 API 额度，需填入你自己的 API 接口或连接本地 Ollama"
+        >
           <Server className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-          <span className="truncate">自定义 AI 接口（自带 Key）</span>
+          <span className="truncate">接入自有 AI 接口（需自备 Key）</span>
         </span>
         <div className="flex items-center gap-1 shrink-0">
           {onOpenSettings && (
@@ -349,15 +353,35 @@ export function AiProviderSelector({
       {editingCustom && (
         <div className="space-y-2.5 border-t border-slate-100 pt-2.5">
           {/* Quick Service Presets */}
-          <div className="space-y-1">
-            <span className="block text-[10.5px] font-medium text-slate-500">
-              一键填充常用接口（也可自由改填中转站 URL）
-            </span>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-1.5">
+              <span className="text-[10.5px] font-medium text-slate-600">
+                快捷填入常用接口地址（仅填 URL/模型名，需自备 Key）
+              </span>
+              <span className="relative group shrink-0">
+                <button
+                  type="button"
+                  aria-label="接口网络与中转站安全提示"
+                  title="请确保你的本地网络环境能够访问该模型接口。如果选择中转站，请自行甄别安全性。"
+                  className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-amber-700 hover:bg-amber-50 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                >
+                  <ShieldAlert className="h-3 w-3 shrink-0" />
+                  <span>安全提示</span>
+                </button>
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute right-0 bottom-full z-30 mb-1.5 w-60 rounded-lg border border-amber-200 bg-slate-900 px-2.5 py-2 text-[10.5px] leading-relaxed text-white shadow-lg opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                >
+                  快捷模板仅自动填入接口地址与模型名，本项目不内置大模型或 API Key。请确保你的本地网络环境能够访问该模型接口。如果选择中转站，请自行甄别安全性。
+                </span>
+              </span>
+            </div>
             <div className="flex flex-wrap gap-1">
               {ENDPOINT_PRESETS.map((preset) => (
                 <button
                   key={preset.label}
                   type="button"
+                  title={`仅填入 ${preset.label} 地址与默认模型名（需自备 Key）。请确保你的本地网络环境能够访问该模型接口。如果选择中转站，请自行甄别安全性。`}
                   onClick={() => {
                     updateDraft({
                       protocol: preset.protocol,
@@ -376,6 +400,15 @@ export function AiProviderSelector({
                 </button>
               ))}
             </div>
+            <p
+              data-testid="ai-endpoint-safety-notice"
+              className="flex items-start gap-1.5 rounded-md border border-amber-200/80 bg-amber-50/70 px-2 py-1.5 text-[10px] leading-relaxed text-amber-900"
+            >
+              <ShieldAlert className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" />
+              <span>
+                请确保你的本地网络环境能够访问该模型接口。如果选择中转站，请自行甄别安全性。
+              </span>
+            </p>
           </div>
 
           {/* Protocol Switcher */}

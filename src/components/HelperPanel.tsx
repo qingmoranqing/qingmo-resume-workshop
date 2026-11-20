@@ -261,10 +261,10 @@ export function HelperPanel({
       <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 space-y-3">
         <div>
           <h3 className="text-xs font-semibold text-slate-900">
-            AI 智能换岗与 JD 定制改写（开源自带模型）
+            AI 智能换岗与 JD 定制改写（接入自有 AI / 外部复制）
           </h3>
           <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
-            投递全新岗位时，基于你的真实经历自动重构定位、要点、技能排序与整套投递助手（绝不编造公司与日期）。
+            本项目不内置大模型：配置你自己的 API（或使用下方免费「复制 Prompt」模式），基于真实经历自动重构定位、要点与投递助手（绝不编造公司与日期）。
           </p>
         </div>
 

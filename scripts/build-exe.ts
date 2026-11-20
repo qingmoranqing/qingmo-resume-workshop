@@ -82,12 +82,28 @@ function parseArgs(): { target: TargetKey; skipVite: boolean } {
   return { target, skipVite };
 }
 
-function runOrThrow(cmd: string, args: string[], cwd: string) {
+function resolveBunBinary(): string {
+  // When invoked via `bun run scripts/build-exe.ts`, process.execPath is the exact bun(.exe) binary.
+  if (typeof (process.versions as Record<string, string | undefined>).bun === 'string') {
+    return process.execPath;
+  }
+  return process.platform === 'win32' ? 'bun.exe' : 'bun';
+}
+
+function runCommand(cmd: string, args: string[], cwd: string) {
   const res = spawnSync(cmd, args, {
     cwd,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: false,
   });
+  return res;
+}
+
+function runOrThrow(cmd: string, args: string[], cwd: string) {
+  const res = runCommand(cmd, args, cwd);
+  if (res.error) {
+    throw new Error(`Failed to execute ${cmd}: ${res.error.message}`);
+  }
   if (res.status !== 0) {
     throw new Error(`Command failed (${res.status}): ${cmd} ${args.join(' ')}`);
   }
@@ -143,10 +159,11 @@ function generateEmbeddedAssetsModule() {
 function main() {
   const { target, skipVite } = parseArgs();
   const cfg = TARGETS[target];
+  const bunBin = resolveBunBinary();
 
   if (!skipVite) {
     console.log('[build-exe] Step 1/3: Building production frontend via Vite...');
-    runOrThrow('bun', ['run', 'build'], ROOT);
+    runOrThrow(bunBin, ['run', 'build'], ROOT);
   }
 
   fs.mkdirSync(RELEASE_DIR, { recursive: true });
@@ -157,24 +174,38 @@ function main() {
     generateEmbeddedAssetsModule();
 
     console.log(`[build-exe] Step 3/3: Compiling standalone binary (${cfg.bunTarget})...`);
-    const compileArgs = [
+    const entryFile = path.join(ROOT, 'scripts', 'exe-entry.ts');
+    const baseCompileArgs = [
       'build',
       '--compile',
       '--minify',
       `--target=${cfg.bunTarget}`,
       `--outfile=${outPath}`,
-      path.join(ROOT, 'scripts', 'exe-entry.ts'),
+      entryFile,
     ];
+
     if (cfg.isWindows && process.platform === 'win32') {
-      compileArgs.splice(
-        3,
-        0,
-        '--windows-title=简历工坊 · Resume Craft',
-        '--windows-description=全行业多风格智能简历编辑器（免安装便携一体版）',
-      );
+      const withMetaArgs = [
+        'build',
+        '--compile',
+        '--minify',
+        '--windows-title=ResumeCraft',
+        '--windows-description=Resume Craft Portable Edition',
+        `--target=${cfg.bunTarget}`,
+        `--outfile=${outPath}`,
+        entryFile,
+      ];
+      const metaRes = runCommand(bunBin, withMetaArgs, ROOT);
+      if (metaRes.error || metaRes.status !== 0) {
+        console.warn(
+          '[build-exe] Windows PE metadata flags failed; retrying standalone compile without metadata flags...',
+        );
+        runOrThrow(bunBin, baseCompileArgs, ROOT);
+      }
+    } else {
+      runOrThrow(bunBin, baseCompileArgs, ROOT);
     }
 
-    runOrThrow('bun', compileArgs, ROOT);
     const stat = fs.statSync(outPath);
     console.log(
       `[build-exe] Done! Output: ${path.relative(ROOT, outPath)} (${(stat.size / (1024 * 1024)).toFixed(1)} MB)`,

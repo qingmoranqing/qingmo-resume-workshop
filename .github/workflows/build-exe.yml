@@ -15,10 +15,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
 
@@ -28,14 +28,17 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
+        shell: bash
         run: bun install --frozen-lockfile || bun install
 
       - name: Type-check & run unit tests
+        shell: bash
         run: |
           bun run lint
           npx --yes tsx --test src/utils/bilingual.test.ts src/utils/competitiveness.test.ts src/utils/resumeLogic.test.ts src/utils/versionDiff.test.ts
 
       - name: Build single-file Windows .exe
+        shell: bash
         run: bun run build:exe
 
       - name: Upload .exe build artifact

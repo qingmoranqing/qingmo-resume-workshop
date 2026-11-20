@@ -55,8 +55,8 @@ interface LeftWorkbenchProps {
 const TAB_META: Record<WorkbenchTab, { title: string; sub: string }> = {
   content: { title: '内容编辑', sub: '含 6 大行业写作参考库，修改实时同步右侧 A4 画布' },
   design: { title: '外观排版', sub: '8 大版式 × 10 主题色 + 自定义主色与黑白打印保护' },
-  audit: { title: '简历体检', sub: '离线 JD 关键词扫描 + 开源自带 AI 深度体检' },
-  helper: { title: '投递与换岗', sub: '开源自带 AI 跨岗重构 + 可编辑投递助手' },
+  audit: { title: '简历体检', sub: '双引擎 JD 扫描 + 接入自有 AI 深度体检' },
+  helper: { title: '投递与换岗', sub: '接入自有 AI 跨岗重构 + 可编辑投递助手' },
   compare: { title: '版本对比', sub: '选择两份简历高亮对比文字增删，快速评估修改优劣' },
 };
 
