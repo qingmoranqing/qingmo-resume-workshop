@@ -1,4 +1,4 @@
-name: Build Electron Desktop App (Windows Portable .exe)
+name: Build Electron Desktop App (Windows Portable .zip)
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build-windows-desktop:
-    name: Build Windows x64 Electron Portable (.exe)
+    name: Build Windows x64 Electron Portable (.zip)
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: npm install -D electron electron-builder
 
-      - name: Package Windows x64 Portable .exe
+      - name: Package Windows x64 Portable .zip
         shell: bash
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -58,18 +58,18 @@ jobs:
             CLEAN_VER="${GITHUB_REF_NAME#v}"
             EXTRA_ARGS="-c.extraMetadata.version=${CLEAN_VER}"
           fi
-          npx electron-builder --win portable --config electron-builder.yml $EXTRA_ARGS
+          npx electron-builder --win zip --config electron-builder.yml $EXTRA_ARGS
 
-      - name: Verify built portable executable
+      - name: Verify built portable archive
         shell: bash
         run: |
-          ls -lh release/ResumeCraft-win-x64.exe
+          ls -lh release/ResumeCraft-win-x64.zip
 
-      - name: Upload Windows Portable .exe Artifact
+      - name: Upload Windows Portable .zip Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ResumeCraft-desktop-win-x64
-          path: release/ResumeCraft-win-x64.exe
+          path: release/ResumeCraft-win-x64.zip
           if-no-files-found: error
 
       - name: Create GitHub Release (on v* tag)
@@ -78,9 +78,9 @@ jobs:
         with:
           generate_release_notes: true
           body: |
-            ### 简历工坊 · Windows 独立桌面便携版（无黑框）
-            - **真正桌面窗口**：基于 Electron 独立窗口运行，无命令行黑框，不再占用本地 3000 端口。
-            - **便携数据落盘**：所有简历数据自动保存在 `ResumeCraft-win-x64.exe` 同级目录的 `resumes-data.json` 中，拷贝 U 盘或迁移目录即刻带走。
+            ### 简历工坊 · Windows 独立桌面绿色版（免安装压缩包，无黑框）
+            - **解压即用 & 秒速启动**：下载并解压 `ResumeCraft-win-x64.zip`，双击目录内的 `ResumeCraft.exe` 即可打开独立桌面窗口，无命令行黑框，不再占用本地 3000 端口。
+            - **便携数据落盘**：所有简历数据自动保存在 `ResumeCraft.exe` 同级目录的 `resumes-data.json` 中，拷贝整个文件夹或 U 盘迁移即刻带走。
             - **高清零边距 PDF 直出**：点击导出 PDF 直接弹出系统保存框并静默生成 A4 零边距矢量 PDF。
             - **Windows SmartScreen 提示**：由于开源个人项目未使用商业代码签名证书，首次运行若弹出安全提示，点击「更多信息」→「仍要运行」即可。
-          files: release/ResumeCraft-win-x64.exe
+          files: release/ResumeCraft-win-x64.zip

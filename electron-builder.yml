@@ -8,7 +8,6 @@ files:
   - "package.json"
 win:
   target:
-    - portable
+    - zip
   signAndEditExecutable: false
-portable:
-  artifactName: "ResumeCraft-win-x64.exe"
+  artifactName: "ResumeCraft-win-x64.${ext}"
