@@ -1,0 +1,14 @@
+appId: com.resumecraft.desktop
+productName: ResumeCraft
+directories:
+  output: release
+files:
+  - "dist/**/*"
+  - "electron/**/*"
+  - "package.json"
+win:
+  target:
+    - portable
+  signAndEditExecutable: false
+portable:
+  artifactName: "ResumeCraft-win-x64.exe"

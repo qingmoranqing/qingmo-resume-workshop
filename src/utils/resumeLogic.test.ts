@@ -51,6 +51,7 @@ import {
   parseExternalJdExtractJson,
   parseExternalJdSemanticJson,
   parseExternalTailorJson,
+  parseLinkedInProfileText,
   parsePlainTextResumeLocal,
   parseRange,
   preprocessJdText,
@@ -1251,6 +1252,109 @@ test('normalizeStoredResumePayload and resolvePortableSyncDecision validate port
   });
   assert.equal(seedDecision.action, 'seed-disk-from-local');
   assert.equal(seedDecision.payload.activeId, sample.id);
+});
+
+test('parseLinkedInProfileText extracts English and Chinese LinkedIn profiles while stripping page noise', () => {
+  const enProfile = `
+Alex Chen
+Senior Full-Stack Engineer | React & Distributed Systems
+San Francisco, California, United States
+Contact info
+500+ connections
+alex.chen@example.com
+https://www.linkedin.com/in/alex-chen-dev
+
+About
+Full-stack engineer with 6+ years building developer platforms.
+
+Experience
+Senior Software Engineer
+CloudScale Labs · Full-time
+Mar 2022 - Present · 3 yrs
+San Francisco, California · Hybrid
+• Architected a real-time collaborative workspace in React 19 serving 120K+ MAU.
+• Reduced initial bundle size by 64%.
+
+Software Engineer
+Northstar Commerce · Full-time
+Jul 2019 - Feb 2022 · 2 yrs 8 mos
+• Built Node.js order microservices processing $45M+ annual GMV.
+
+Education
+University of California, Berkeley
+Bachelor of Science, Computer Science
+2015 - 2019
+
+Licenses & certifications
+AWS Certified Solutions Architect – Associate
+Issued Jan 2023
+
+Skills
+TypeScript · React · Node.js · PostgreSQL · Docker
+Endorsed by 15 colleagues
+`;
+
+  const enDoc = parseLinkedInProfileText(enProfile);
+  assert.equal(enDoc.name, 'Alex Chen · LinkedIn 导入版');
+  assert.equal(enDoc.data.basic.name, 'Alex Chen');
+  assert.equal(enDoc.data.basic.email, 'alex.chen@example.com');
+  assert.ok(enDoc.data.basic.location.includes('San Francisco'));
+  assert.ok(
+    enDoc.data.basic.extras.some((e) => e.label === 'LinkedIn' && e.value === 'linkedin.com/in/alex-chen-dev'),
+  );
+  assert.equal(enDoc.data.experience.length, 2);
+  assert.equal(enDoc.data.experience[0].company, 'CloudScale Labs');
+  assert.equal(enDoc.data.experience[0].role, 'Senior Software Engineer');
+  assert.equal(enDoc.data.experience[0].period, '2022.03 - Present');
+  assert.equal(enDoc.data.experience[0].bullets.length, 2);
+  assert.equal(enDoc.data.experience[1].company, 'Northstar Commerce');
+  assert.equal(enDoc.data.experience[1].period, '2019.07 - 2022.02');
+  assert.equal(enDoc.data.education.length, 1);
+  assert.equal(enDoc.data.education[0].school, 'University of California, Berkeley');
+  assert.equal(enDoc.data.education[0].degree, 'Bachelor of Science');
+  assert.equal(enDoc.data.education[0].major, 'Computer Science');
+  assert.equal(enDoc.data.education[0].period, '2015 - 2019');
+  assert.ok(enDoc.data.certs.includes('AWS Certified Solutions Architect – Associate'));
+  assert.ok(!enDoc.data.certs.some((c) => c.startsWith('Issued')));
+  assert.ok(enDoc.data.tags.includes('TypeScript'));
+  assert.equal(enDoc.meta.titles.experience, 'EXPERIENCE');
+
+  const zhProfile = `
+陈宇航
+高级数据产品经理 | 商业智能与增长分析
+上海，中国
+13812345678
+chenyuhang@example.com
+linkedin.com/in/chen-yuhang
+
+个人简介
+5 年零售与互联网数据产品经验，擅长指标体系与商业分析落地。
+
+工作经历
+高级数据产品经理
+星海数科 · 全职
+2021年6月 - 至今
+• 主导经营看板与自助 BI 平台建设，月活业务方突破 2000+。
+
+教育背景
+复旦大学
+本科，信息管理与信息系统
+2015.09 - 2019.06
+
+技能
+SQL · Python · Tableau · 产品规划
+`;
+
+  const zhDoc = parseLinkedInProfileText(zhProfile);
+  assert.equal(zhDoc.data.basic.name, '陈宇航');
+  assert.equal(zhDoc.data.basic.phone, '13812345678');
+  assert.equal(zhDoc.data.experience.length, 1);
+  assert.equal(zhDoc.data.experience[0].company, '星海数科');
+  assert.equal(zhDoc.data.experience[0].role, '高级数据产品经理');
+  assert.equal(zhDoc.data.experience[0].period, '2021.06 - 至今');
+  assert.equal(zhDoc.data.education[0].school, '复旦大学');
+  assert.ok(zhDoc.data.tags.includes('SQL'));
+  assert.equal(zhDoc.meta.titles.experience, undefined);
 });
 
 

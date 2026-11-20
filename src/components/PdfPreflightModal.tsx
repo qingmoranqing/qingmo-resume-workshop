@@ -14,6 +14,7 @@ interface PdfPreflightModalProps {
   open: boolean;
   report: PdfPreflightReport | null;
   pdfTitle: string;
+  isDesktop?: boolean;
   onClose: () => void;
   onFixModule: (moduleKey: string, guideHint: string) => void;
   onProceedExport: () => void;
@@ -31,6 +32,7 @@ export function PdfPreflightModal({
   open,
   report,
   pdfTitle,
+  isDesktop = false,
   onClose,
   onFixModule,
   onProceedExport,
@@ -234,13 +236,15 @@ export function PdfPreflightModal({
             </div>
           )}
 
-          {/* Print Dialog Quick Hint */}
+          {/* Print / Desktop Export Quick Hint */}
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-2.5 text-[11px] leading-relaxed text-slate-600 space-y-0.5">
             <div className="font-medium text-slate-800">
               输出文件名：<span className="font-mono text-slate-700">{pdfTitle}.pdf</span>
             </div>
             <div>
-              打印提示：在浏览器打印弹窗中选择「另存为 PDF」，勾选「背景图形」并取消「页眉和页脚」，即可获得高清矢量简历。
+              {isDesktop
+                ? '桌面版提示：点击导出后将直接弹出系统保存框，静默生成高清零边距 A4 矢量 PDF（无需浏览器打印设置）。'
+                : '打印提示：在浏览器打印弹窗中选择「另存为 PDF」，勾选「背景图形」并取消「页眉和页脚」，即可获得高清矢量简历。'}
             </div>
           </div>
         </div>

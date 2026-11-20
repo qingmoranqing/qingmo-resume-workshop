@@ -5,6 +5,9 @@ import { ModalDialog, type ModalConfig } from './components/ModalDialog';
 import { ResumeCanvas } from './components/ResumeCanvas';
 import { TopBar } from './components/TopBar';
 
+const LinkedInImportModal = lazy(() =>
+  import('./components/LinkedInImportModal').then((m) => ({ default: m.LinkedInImportModal })),
+);
 const OnboardingGuideModal = lazy(() =>
   import('./components/OnboardingGuideModal').then((m) => ({ default: m.OnboardingGuideModal })),
 );
@@ -27,6 +30,12 @@ import {
   normalizeBilingual,
 } from './utils/bilingual';
 import { evaluateResumeCompetitiveness } from './utils/competitiveness';
+import {
+  exportResumePdfUnified,
+  isElectronDesktop,
+  loadPersistedResumeStore,
+  savePersistedResumeStore,
+} from './utils/desktopBridge';
 import type {
   AiConfigSaveResult,
   AiProviderId,
@@ -180,6 +189,7 @@ export default function App() {
   });
   const [templateGalleryOpen, setTemplateGalleryOpen] = useState<boolean>(false);
   const [importModalOpen, setImportModalOpen] = useState<boolean>(false);
+  const [linkedinImportOpen, setLinkedinImportOpen] = useState<boolean>(false);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [pdfPreflightOpen, setPdfPreflightOpen] = useState<boolean>(false);
   const [comparePair, setComparePair] = useState<{
@@ -216,6 +226,8 @@ export default function App() {
   const futureRef = useRef<ResumeDoc[][]>(future);
   futureRef.current = future;
   const quotaWarnedRef = useRef<boolean>(false);
+  const desktopMode = useMemo(() => isElectronDesktop(), []);
+  const pdfExportingRef = useRef<boolean>(false);
   const [portableDataFilePath, setPortableDataFilePath] = useState<string | null>(null);
   const portableSyncReadyRef = useRef<boolean>(false);
   const portableDirtyRef = useRef<boolean>(false);
@@ -225,15 +237,14 @@ export default function App() {
     setFuture([]);
   }, []);
 
-  // Hydrate from portable `.exe` disk file (`resumes-data.json`) on startup when running in standalone mode
+  // Hydrate from Electron desktop IPC or standalone portable HTTP disk file (`resumes-data.json`) on startup
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/local-store')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json: { enabled?: boolean; filePath?: string | null; data?: unknown } | null) => {
-        if (cancelled || !json?.enabled) return;
-        setPortableDataFilePath(json.filePath || 'resumes-data.json');
-        const diskPayload = normalizeStoredResumePayload(json.data, normalizeBilingual);
+    void loadPersistedResumeStore()
+      .then((result) => {
+        if (cancelled || !result.enabled) return;
+        setPortableDataFilePath(result.filePath || 'resumes-data.json');
+        const diskPayload = normalizeStoredResumePayload(result.data, normalizeBilingual);
         const decision = resolvePortableSyncDecision({
           localPayload: { activeId: activeIdRef.current, resumes: resumesRef.current },
           diskPayload,
@@ -243,11 +254,7 @@ export default function App() {
           setResumes(decision.payload.resumes);
           setActiveId(decision.payload.activeId);
         } else {
-          void fetch('/api/local-store', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(decision.payload),
-          }).catch(() => {});
+          void savePersistedResumeStore(decision.payload).catch(() => {});
         }
       })
       .catch(() => {
@@ -258,7 +265,7 @@ export default function App() {
     };
   }, []);
 
-  // Persist to localStorage (and debounced to portable `resumes-data.json` when enabled)
+  // Persist to localStorage (and debounced to portable/desktop `resumes-data.json` when enabled)
   useEffect(() => {
     const payload: StoredResumePayload = { activeId: activeDoc.id, resumes };
     try {
@@ -275,16 +282,12 @@ export default function App() {
     portableDirtyRef.current = true;
     const timer = window.setTimeout(() => {
       portableDirtyRef.current = false;
-      void fetch('/api/local-store', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
+      void savePersistedResumeStore(payload).catch(() => {});
     }, 350);
     return () => window.clearTimeout(timer);
   }, [resumes, activeDoc.id, notify, portableDataFilePath]);
 
-  // Flush any pending debounced portable disk write if the user closes the tab immediately after editing
+  // Flush any pending debounced portable/desktop disk write if the user closes the window immediately after editing
   useEffect(() => {
     if (!portableDataFilePath) return;
     const flushPending = () => {
@@ -294,12 +297,7 @@ export default function App() {
         activeId: activeIdRef.current,
         resumes: resumesRef.current,
       };
-      void fetch('/api/local-store', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        keepalive: true,
-      }).catch(() => {});
+      void savePersistedResumeStore(payload, { keepalive: true }).catch(() => {});
     };
     window.addEventListener('pagehide', flushPending);
     window.addEventListener('beforeunload', flushPending);
@@ -369,8 +367,9 @@ export default function App() {
     }
   }, []);
 
-  // Discover available self-hosted server AI providers
+  // Discover available self-hosted server AI providers (skipped in serverless Electron desktop mode)
   const refreshAiProviders = useCallback(() => {
+    if (isElectronDesktop()) return;
     fetch('/api/ai/providers')
       .then((r) => (r.ok ? r.json() : null))
       .then((json) => {
@@ -531,6 +530,7 @@ export default function App() {
         if (modal) setModal(null);
         else if (pdfPreflightOpen) setPdfPreflightOpen(false);
         else if (settingsOpen) setSettingsOpen(false);
+        else if (linkedinImportOpen) setLinkedinImportOpen(false);
         else if (importModalOpen) setImportModalOpen(false);
         else if (guideOpen) handleDismissGuide();
         else if (templateGalleryOpen) setTemplateGalleryOpen(false);
@@ -544,6 +544,7 @@ export default function App() {
     modal,
     pdfPreflightOpen,
     settingsOpen,
+    linkedinImportOpen,
     importModalOpen,
     guideOpen,
     handleDismissGuide,
@@ -962,15 +963,54 @@ export default function App() {
     }, 600);
   };
 
+  const runPdfExportAction = useCallback(async () => {
+    if (pdfExportingRef.current) return;
+    const suggestedFileName = `${buildPdfTitle(activeDoc)}.pdf`;
+    if (!isElectronDesktop()) {
+      triggerPrint();
+      return;
+    }
+    pdfExportingRef.current = true;
+    try {
+      const result = await exportResumePdfUnified({
+        suggestedFileName,
+        onWebPrint: triggerPrint,
+      });
+      if (result.mode === 'desktop') {
+        if (result.ok) {
+          const savedLabel = result.filePath
+            ? result.filePath.split(/[\\/]/).pop() || suggestedFileName
+            : suggestedFileName;
+          notify(`已导出高清 PDF：${savedLabel}`);
+        } else if (!result.canceled) {
+          notify(result.error || '导出 PDF 失败，请重试');
+        }
+      }
+    } finally {
+      pdfExportingRef.current = false;
+    }
+  }, [activeDoc, notify]);
+
   const handleExportPdf = () => {
     setToast(null);
+    if (isElectronDesktop()) {
+      // Wait two animation frames so toast clears cleanly before silent printToPDF capture
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          void runPdfExportAction();
+        });
+      });
+      return;
+    }
     setPdfPreflightOpen(true);
   };
 
   const handleProceedPdfPrint = () => {
     setPdfPreflightOpen(false);
     window.requestAnimationFrame(() => {
-      triggerPrint();
+      window.requestAnimationFrame(() => {
+        void runPdfExportAction();
+      });
     });
   };
 
@@ -1014,6 +1054,7 @@ export default function App() {
         onExportJson={handleExportJson}
         onImportJson={handleImportJson}
         onOpenTextImport={() => setImportModalOpen(true)}
+        onOpenLinkedInImport={() => setLinkedinImportOpen(true)}
         onResetDefaults={handleResetDefaults}
         onCopyPlainText={handleCopyPlainText}
         onExportWord={handleExportWord}
@@ -1130,6 +1171,17 @@ export default function App() {
           />
         )}
 
+        {linkedinImportOpen && (
+          <LinkedInImportModal
+            open={linkedinImportOpen}
+            providers={providers}
+            selectedProvider={selectedProvider}
+            customConfig={customAiConfig}
+            onClose={() => setLinkedinImportOpen(false)}
+            onImportDoc={handleImportParsedDoc}
+          />
+        )}
+
         {guideOpen && (
           <OnboardingGuideModal
             open={guideOpen}
@@ -1162,6 +1214,7 @@ export default function App() {
             open={pdfPreflightOpen}
             report={pdfPreflightReport}
             pdfTitle={buildPdfTitle(activeDoc)}
+            isDesktop={desktopMode}
             onClose={() => setPdfPreflightOpen(false)}
             onFixModule={handleFixFromPreflight}
             onProceedExport={handleProceedPdfPrint}

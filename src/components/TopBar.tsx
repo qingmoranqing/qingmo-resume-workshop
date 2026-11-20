@@ -10,6 +10,7 @@ import {
   GitCompareArrows,
   HelpCircle,
   LayoutGrid,
+  Linkedin,
   PanelLeftClose,
   PanelLeftOpen,
   Printer,
@@ -48,6 +49,7 @@ interface TopBarProps {
   onExportJson: () => void;
   onImportJson: (file: File) => void;
   onOpenTextImport: () => void;
+  onOpenLinkedInImport: () => void;
   onResetDefaults: () => void;
   onCopyPlainText: () => void;
   onExportWord: () => void;
@@ -89,6 +91,7 @@ export function TopBar({
   onExportJson,
   onImportJson,
   onOpenTextImport,
+  onOpenLinkedInImport,
   onResetDefaults,
   onCopyPlainText,
   onExportWord,
@@ -207,6 +210,17 @@ export function TopBar({
                 >
                   <Upload className="h-3.5 w-3.5 text-blue-600" />
                   粘贴旧简历文本一键导入
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onOpenLinkedInImport();
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs font-medium text-[#0A66C2] hover:bg-sky-50/80"
+                >
+                  <Linkedin className="h-3.5 w-3.5 text-[#0A66C2]" />
+                  从 LinkedIn 档案导入
                 </button>
                 <button
                   type="button"

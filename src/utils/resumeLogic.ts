@@ -4195,4 +4195,417 @@ export function resolvePortableSyncDecision(params: {
   return { action: 'seed-disk-from-local', payload: params.localPayload };
 }
 
+const LINKEDIN_MONTH_MAP: Record<string, string> = {
+  jan: '01',
+  january: '01',
+  feb: '02',
+  february: '02',
+  mar: '03',
+  march: '03',
+  apr: '04',
+  april: '04',
+  may: '05',
+  jun: '06',
+  june: '06',
+  jul: '07',
+  july: '07',
+  aug: '08',
+  august: '08',
+  sep: '09',
+  sept: '09',
+  september: '09',
+  oct: '10',
+  october: '10',
+  nov: '11',
+  november: '11',
+  dec: '12',
+  december: '12',
+};
+
+const LINKEDIN_NOISE_RE =
+  /^(?:1st|2nd|3rd\+?|contact info|connections?|\d+\+?\s*(?:connections?|followers?)|show all.*|see (?:more|less|all).*|\.{2,}\s*see more|follow|following|connect|message|more|open to work|highlights|activity|interests|recommendations|people also viewed|page \d+ of \d+|endorsed by .*|\d+\s*endorsements?|top voices|verified|he\/him|she\/her|they\/them|联系信息|\d+\+?\s*位好友|关注|发消息|查看更多|显示全部.*)$/i;
+
+const LINKEDIN_PERIOD_RE =
+  /(?:(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}|\d{4}\s*[./年-]\s*\d{1,2}\s*月?|\b(?:19|20)\d{2}\b)\s*(?:[-–—~]|至(?!今))+\s*(?:(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}|\d{4}\s*[./年-]\s*\d{1,2}\s*月?|\b(?:19|20)\d{2}\b|Present|Current|Now|至今)/i;
+
+function normalizeLinkedInDateToken(token: string, preferEnglish: boolean): string {
+  const clean = token.trim();
+  if (/^(?:present|current|now|至今)$/i.test(clean)) {
+    return preferEnglish ? 'Present' : '至今';
+  }
+  const enMonth = clean.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (enMonth) {
+    const mm = LINKEDIN_MONTH_MAP[enMonth[1].toLowerCase()];
+    if (mm) return `${enMonth[2]}.${mm}`;
+  }
+  const zhDate = clean.match(/^(\d{4})\s*[./年-]\s*(\d{1,2})\s*月?$/);
+  if (zhDate) {
+    return `${zhDate[1]}.${zhDate[2].padStart(2, '0')}`;
+  }
+  return clean;
+}
+
+function normalizeLinkedInPeriod(raw: string, preferEnglish: boolean): string {
+  const m = raw.match(LINKEDIN_PERIOD_RE);
+  if (!m) return '';
+  const rangeStr = m[0];
+  const parts = rangeStr.split(/\s*(?:[-–—~]|至(?!今))+\s*/);
+  if (parts.length < 2) return rangeStr.trim();
+  const start = normalizeLinkedInDateToken(parts[0], preferEnglish);
+  const end = normalizeLinkedInDateToken(parts[1], preferEnglish);
+  return `${start} - ${end}`;
+}
+
+function stripLinkedInEmploymentMeta(line: string): string {
+  return line
+    .replace(
+      /\s*[·•|]\s*(?:Full-time|Part-time|Self-employed|Freelance|Contract|Internship|Apprenticeship|Seasonal|On-site|Hybrid|Remote|全职|兼职|实习|自由职业|合同工|远程|现场|混合办公)(?=\s|$|[·•|])/gi,
+      '',
+    )
+    .replace(/\s*[·•]\s*\d+\s*(?:yrs?|mos?|years?|months?|年|个月)(?:\s+\d+\s*(?:mos?|months?|个月))?$/i, '')
+    .trim();
+}
+
+/**
+ * Pure offline LinkedIn profile text parser (supports LinkedIn Web copy-paste and "Save to PDF" text, EN & ZH).
+ * Transforms pasted LinkedIn profile text into a normalized ResumeDoc ready for `handleImportParsedDoc`.
+ */
+export function parseLinkedInProfileText(rawText: string): ResumeDoc {
+  const rawLines = (rawText || '')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((l) => l.replace(/\u200B|\uFEFF/g, '').trim())
+    .filter(Boolean);
+
+  const lines = rawLines.filter((l) => !LINKEDIN_NOISE_RE.test(l));
+  const joined = lines.join('\n');
+
+  const cjkCount = (joined.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const latinWordCount = (joined.match(/[A-Za-z]{2,}/g) || []).length;
+  const preferEnglish = cjkCount < 20 && latinWordCount >= 12;
+
+  const emailMatch = joined.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+  const cnPhoneMatch = joined.match(/1[3-9]\d[\s-]?\d{4}[\s-]?\d{4}/);
+  const intlPhoneMatch = joined.match(/\+\d{1,3}[\s.-]?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}/);
+  const linkedInUrlMatch = joined.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9-_%]+/i);
+
+  type LiSec = 'head' | 'about' | 'exp' | 'edu' | 'skill' | 'cert' | 'other';
+  let currentSec: LiSec = 'head';
+  const buckets: Record<LiSec, string[]> = {
+    head: [],
+    about: [],
+    exp: [],
+    edu: [],
+    skill: [],
+    cert: [],
+    other: [],
+  };
+
+  for (const line of lines) {
+    const cleanHeading = line.replace(/[：:]+$/, '').trim();
+    if (cleanHeading.length <= 32) {
+      if (/^(?:About|Summary|简介|个人简介|关于)$/i.test(cleanHeading)) {
+        currentSec = 'about';
+        continue;
+      }
+      if (/^(?:Experience|Work Experience|工作经历|工作经验|职业经历)$/i.test(cleanHeading)) {
+        currentSec = 'exp';
+        continue;
+      }
+      if (/^(?:Education|教育背景|教育经历)$/i.test(cleanHeading)) {
+        currentSec = 'edu';
+        continue;
+      }
+      if (/^(?:Skills|Top Skills|Skills & Endorsements|技能|核心技能|专业技能)$/i.test(cleanHeading)) {
+        currentSec = 'skill';
+        continue;
+      }
+      if (/^(?:Licenses & certifications|Certifications|Honors-Awards|Honors & awards|执照和资格证书|资格证书|资质证书|荣誉奖项)$/i.test(cleanHeading)) {
+        currentSec = 'cert';
+        continue;
+      }
+      if (/^(?:Languages|Contact|Volunteering|Publications|Projects|语言能力|联系方式)$/i.test(cleanHeading)) {
+        currentSec = /^Contact|联系方式$/i.test(cleanHeading) ? 'head' : 'other';
+        continue;
+      }
+    }
+    buckets[currentSec].push(line);
+  }
+
+  // Extract Name, Headline, and Location from header bucket
+  const headCandidates = buckets.head.filter(
+    (l) =>
+      !/@/.test(l) &&
+      !/linkedin\.com\/in\//i.test(l) &&
+      !/^(?:\+?\d[\d\s()-]{7,})$/.test(l) &&
+      !/^\(?(?:Mobile|Work|Home|Email|LinkedIn)\)?$/i.test(l),
+  );
+
+  let name = '';
+  let nameIdx = -1;
+  for (let i = 0; i < Math.min(headCandidates.length, 5); i++) {
+    const cand = headCandidates[i];
+    if (cand.length >= 2 && cand.length <= 42 && !/[,|·•]/.test(cand)) {
+      name = cand;
+      nameIdx = i;
+      break;
+    }
+  }
+  if (!name && headCandidates.length > 0) {
+    name = headCandidates[0].slice(0, 40);
+    nameIdx = 0;
+  }
+
+  const afterName = nameIdx >= 0 ? headCandidates.slice(nameIdx + 1) : headCandidates;
+  let headline = '';
+  let location = '';
+
+  for (const line of afterName) {
+    const looksLikeLocation =
+      /(?:Area|Metropolitan|United States|United Kingdom|Canada|Australia|Singapore|China|Germany|Japan|France|Remote|California|New York|Texas|Washington|London|Tokyo|北京|上海|广州|深圳|杭州|苏州|成都|南京|香港|新加坡)/i.test(
+        line,
+      ) && line.length <= 60;
+    if (!location && looksLikeLocation && (headline || /,/.test(line))) {
+      location = line.replace(/\s*·\s*Contact info$/i, '').trim();
+    } else if (!headline && line.length >= 4 && line.length <= 120) {
+      headline = line;
+    } else if (!location && line.length >= 2 && line.length <= 48 && /,/.test(line)) {
+      location = line;
+    }
+  }
+
+  // Parse Experience entries (split on lines containing LinkedIn date ranges)
+  const experiences: ResumeDoc['data']['experience'] = [];
+  if (buckets.exp.length > 0) {
+    const expLines = buckets.exp;
+    const periodIndices: number[] = [];
+    for (let i = 0; i < expLines.length; i++) {
+      if (LINKEDIN_PERIOD_RE.test(expLines[i])) {
+        periodIndices.push(i);
+      }
+    }
+
+    if (periodIndices.length > 0) {
+      let cursor = 0;
+      for (let p = 0; p < periodIndices.length; p++) {
+        const pIdx = periodIndices[p];
+        const nextPIdx = p + 1 < periodIndices.length ? periodIndices[p + 1] : expLines.length;
+        // Reserve up to 2 header lines (role + company) immediately preceding the next period line
+        const bodyEnd =
+          p + 1 < periodIndices.length ? Math.max(pIdx + 1, nextPIdx - 2) : expLines.length;
+
+        const headerSlice = expLines.slice(cursor, pIdx).map(stripLinkedInEmploymentMeta).filter(Boolean);
+        const periodStr = normalizeLinkedInPeriod(expLines[pIdx], preferEnglish);
+        const rawBody = expLines.slice(pIdx + 1, bodyEnd);
+
+        // First line after period is often a location line (e.g. "San Francisco, CA · Hybrid")
+        const bodyLines: string[] = [];
+        for (let b = 0; b < rawBody.length; b++) {
+          const cleaned = rawBody[b].replace(/^[•·\-—*]\s*/, '').trim();
+          if (!cleaned) continue;
+          if (
+            b === 0 &&
+            cleaned.length <= 50 &&
+            /(?:Remote|Hybrid|On-site|Area|United States|China|Singapore|California|New York|北京|上海|深圳|杭州|广州)/i.test(
+              cleaned,
+            ) &&
+            !/[.。%$¥]/.test(cleaned)
+          ) {
+            continue;
+          }
+          bodyLines.push(cleaned);
+        }
+
+        let role = '';
+        let company = '';
+        if (headerSlice.length >= 2) {
+          role = headerSlice[headerSlice.length - 2];
+          company = headerSlice[headerSlice.length - 1];
+        } else if (headerSlice.length === 1) {
+          const single = headerSlice[0];
+          const atSplit = single.split(/\s+(?:at|@)\s+/i);
+          if (atSplit.length === 2) {
+            role = atSplit[0].trim();
+            company = atSplit[1].trim();
+          } else {
+            company = single;
+          }
+        } else {
+          company = preferEnglish ? 'Imported Experience' : 'LinkedIn 导入经历';
+        }
+
+        experiences.push({
+          id: nid('exp'),
+          company: company.slice(0, 60),
+          role: role.slice(0, 60),
+          period: periodStr,
+          subtitle: '',
+          kpis: [],
+          bullets: bodyLines.slice(0, 8),
+        });
+
+        cursor = bodyEnd;
+      }
+    } else {
+      const cleaned = expLines.map((l) => l.replace(/^[•·\-—*]\s*/, '').trim()).filter(Boolean);
+      experiences.push({
+        id: nid('exp'),
+        company: stripLinkedInEmploymentMeta(cleaned[0] || '') || (preferEnglish ? 'Experience' : 'LinkedIn 导入经历'),
+        role: '',
+        period: '',
+        subtitle: '',
+        kpis: [],
+        bullets: cleaned.slice(1, 8),
+      });
+    }
+  }
+
+  // Parse Education entries
+  const educations: ResumeDoc['data']['education'] = [];
+  if (buckets.edu.length > 0) {
+    const eduLines = buckets.edu;
+    let currentEdu: { school: string; major: string; degree: string; period: string; desc: string[] } | null = null;
+    const flushEdu = () => {
+      if (!currentEdu) return;
+      educations.push({
+        id: nid('edu'),
+        school: currentEdu.school,
+        major: currentEdu.major,
+        degree: currentEdu.degree,
+        period: currentEdu.period,
+        desc: currentEdu.desc.join(' · '),
+      });
+      currentEdu = null;
+    };
+
+    for (const line of eduLines) {
+      if (LINKEDIN_PERIOD_RE.test(line)) {
+        const period = normalizeLinkedInPeriod(line, preferEnglish);
+        const rest = line.replace(LINKEDIN_PERIOD_RE, '').replace(/^[,·|\s-]+|[,·|\s-]+$/g, '').trim();
+        if (!currentEdu) {
+          currentEdu = { school: rest || line, major: '', degree: '', period, desc: [] };
+        } else if (!currentEdu.period) {
+          currentEdu.period = period;
+          if (rest) currentEdu.desc.push(rest);
+        } else {
+          flushEdu();
+          currentEdu = { school: rest || line, major: '', degree: '', period, desc: [] };
+        }
+        continue;
+      }
+
+      const looksLikeDegree =
+        /\b(?:Bachelor|Master|Ph\.?D|MBA|B\.S\.?|M\.S\.?|B\.A\.?|M\.A\.?|B\.Eng|M\.Eng|Associate|Diploma)\b|本科|硕士|博士|学士|研究生|专科/i.test(
+          line,
+        );
+      if (!currentEdu) {
+        currentEdu = { school: line, major: '', degree: '', period: '', desc: [] };
+      } else if (looksLikeDegree && !currentEdu.degree) {
+        const parts = line.split(/[,，·]/).map((s) => s.trim()).filter(Boolean);
+        currentEdu.degree = parts[0] || line;
+        currentEdu.major = parts.slice(1).join(', ');
+      } else if (currentEdu.period) {
+        // After a period line, a new school name starts the next education entry
+        flushEdu();
+        currentEdu = { school: line, major: '', degree: '', period: '', desc: [] };
+      } else {
+        currentEdu.desc.push(line);
+      }
+    }
+    flushEdu();
+  }
+
+  // Parse Skills & Tags
+  const skillTokens: string[] = [];
+  const seenSkills = new Set<string>();
+  for (const line of buckets.skill) {
+    const cleaned = line
+      .replace(/^[•·\-—*]\s*/, '')
+      .replace(/\s*·\s*\d+\s*endorsements?$/i, '')
+      .trim();
+    if (!cleaned || cleaned.length > 100) continue;
+    for (const part of cleaned.split(/[·•,，|、/]+/)) {
+      const token = part.trim();
+      if (!token || token.length > 40) continue;
+      const key = token.toLowerCase();
+      if (!seenSkills.has(key)) {
+        seenSkills.add(key);
+        skillTokens.push(token);
+      }
+    }
+  }
+
+  const data = emptyData();
+  data.basic.name = name || (preferEnglish ? 'LinkedIn Candidate' : 'LinkedIn 候选人');
+  data.basic.headline = headline;
+  data.basic.phone = cnPhoneMatch
+    ? cnPhoneMatch[0].replace(/[\s-]/g, '')
+    : intlPhoneMatch
+      ? intlPhoneMatch[0].trim()
+      : '';
+  data.basic.email = emailMatch ? emailMatch[0] : '';
+  data.basic.location = location;
+
+  if (linkedInUrlMatch) {
+    data.basic.extras.push({
+      id: nid('ext'),
+      label: 'LinkedIn',
+      value: linkedInUrlMatch[0].replace(/^https?:\/\/(?:www\.)?/i, ''),
+    });
+  }
+
+  data.intent.position = experiences[0]?.role || headline.split(/[|·]/)[0]?.trim() || '';
+  data.intent.city = location;
+  data.experience = experiences;
+  data.education = educations;
+
+  if (skillTokens.length > 0) {
+    data.skills = [
+      {
+        id: nid('sk'),
+        cat: preferEnglish ? 'Core Skills' : '核心技能',
+        items: skillTokens.slice(0, 18).join(' / '),
+      },
+    ];
+    data.tags = skillTokens.slice(0, 6);
+  }
+
+  if (buckets.cert.length > 0) {
+    data.certs = buckets.cert
+      .map((l) => l.replace(/^[•·\-—*]\s*/, '').trim())
+      .filter((l) => l.length >= 2 && !/^Issued\s+/i.test(l) && !/^Credential ID/i.test(l))
+      .slice(0, 8);
+  }
+
+  if (buckets.about.length > 0) {
+    data.evals = [
+      {
+        id: nid('ev'),
+        title: preferEnglish ? 'Profile Summary' : '个人简介',
+        body: buckets.about.join(' ').slice(0, 420),
+      },
+    ];
+  }
+
+  // Fallback if the user pasted unstructured LinkedIn text without section headings
+  if (data.experience.length === 0 && data.education.length === 0 && data.evals.length === 0) {
+    const fallback = parsePlainTextResumeLocal(rawText);
+    fallback.name = `${fallback.data.basic.name} · LinkedIn 导入版`;
+    return fallback;
+  }
+
+  const meta = normalizeMeta({ template: 'single-column', theme: 'navy-blue' });
+  if (preferEnglish) {
+    applySectionLanguage(meta, 'en');
+  }
+
+  return {
+    id: nid('resume'),
+    name: `${data.basic.name} · LinkedIn 导入版`,
+    meta,
+    data,
+  };
+}
+
+
 
