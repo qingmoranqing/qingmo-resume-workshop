@@ -7,3 +7,6 @@ coverage/
 *.log
 .env*
 !.env.example
+public/assets/aistudio/
+resumes-data.json
+resumes-data.json.tmp

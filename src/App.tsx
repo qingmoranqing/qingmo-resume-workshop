@@ -46,8 +46,11 @@ import {
   normalizeData,
   normalizeLineage,
   normalizeMeta,
+  normalizeStoredResumePayload,
+  resolvePortableSyncDecision,
   runLocalAudit,
   runPdfExportPreflight,
+  type StoredResumePayload,
   validateCustomAiConfig,
 } from './utils/resumeLogic';
 
@@ -96,12 +99,7 @@ function loadCustomAiConfig(): CustomAiConfig {
   }
 }
 
-interface StoredPayload {
-  activeId: string;
-  resumes: ResumeDoc[];
-}
-
-function loadInitialState(): StoredPayload {
+function loadInitialState(): StoredResumePayload {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
@@ -110,30 +108,15 @@ function loadInitialState(): StoredPayload {
         resumes: DEFAULT_RESUMES.map(cloneResumeDoc),
       };
     }
-    const parsed = JSON.parse(raw) as Partial<StoredPayload>;
-    if (!Array.isArray(parsed.resumes) || parsed.resumes.length === 0) {
+    const parsed = JSON.parse(raw);
+    const normalized = normalizeStoredResumePayload(parsed, normalizeBilingual);
+    if (!normalized) {
       return {
         activeId: DEFAULT_RESUMES[0].id,
         resumes: DEFAULT_RESUMES.map(cloneResumeDoc),
       };
     }
-    const normalized = parsed.resumes.map((r) => {
-      const lineage = normalizeLineage(r.lineage);
-      const bilingual = normalizeBilingual(r.bilingual);
-      return {
-        id: r.id || nid('resume'),
-        name: r.name || '未命名版本',
-        meta: normalizeMeta(r.meta),
-        data: normalizeData(r.data),
-        ...(lineage ? { lineage } : {}),
-        ...(bilingual ? { bilingual } : {}),
-      };
-    });
-    const activeExists = normalized.some((r) => r.id === parsed.activeId);
-    return {
-      activeId: activeExists && parsed.activeId ? parsed.activeId : normalized[0].id,
-      resumes: normalized,
-    };
+    return normalized;
   } catch {
     return {
       activeId: DEFAULT_RESUMES[0].id,
@@ -224,16 +207,51 @@ export default function App() {
   const futureRef = useRef<ResumeDoc[][]>(future);
   futureRef.current = future;
   const quotaWarnedRef = useRef<boolean>(false);
+  const [portableDataFilePath, setPortableDataFilePath] = useState<string | null>(null);
+  const portableSyncReadyRef = useRef<boolean>(false);
 
   const pushHistorySnapshot = useCallback((snapshot: ResumeDoc[]) => {
     setPast((p) => [...p.slice(-(MAX_HISTORY - 1)), snapshot.map(cloneResumeDoc)]);
     setFuture([]);
   }, []);
 
-  // Persist to localStorage with visible warning if browser quota is exceeded (e.g. many large photos)
+  // Hydrate from portable `.exe` disk file (`resumes-data.json`) on startup when running in standalone mode
   useEffect(() => {
+    let cancelled = false;
+    fetch('/api/local-store')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { enabled?: boolean; filePath?: string | null; data?: unknown } | null) => {
+        if (cancelled || !json?.enabled) return;
+        setPortableDataFilePath(json.filePath || 'resumes-data.json');
+        const diskPayload = normalizeStoredResumePayload(json.data, normalizeBilingual);
+        const decision = resolvePortableSyncDecision({
+          localPayload: { activeId: activeIdRef.current, resumes: resumesRef.current },
+          diskPayload,
+        });
+        portableSyncReadyRef.current = true;
+        if (decision.action === 'hydrate-from-disk') {
+          setResumes(decision.payload.resumes);
+          setActiveId(decision.payload.activeId);
+        } else {
+          void fetch('/api/local-store', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(decision.payload),
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {
+        // Non-portable web mode or offline — fall back transparently to localStorage
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Persist to localStorage (and debounced to portable `resumes-data.json` when enabled)
+  useEffect(() => {
+    const payload: StoredResumePayload = { activeId: activeDoc.id, resumes };
     try {
-      const payload: StoredPayload = { activeId: activeDoc.id, resumes };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       quotaWarnedRef.current = false;
     } catch {
@@ -242,7 +260,17 @@ export default function App() {
         notify('浏览器本地存储空间已满，请先「导出全部 JSON 备份」并删除冗余版本或更换较小证件照');
       }
     }
-  }, [resumes, activeDoc.id, notify]);
+
+    if (!portableDataFilePath || !portableSyncReadyRef.current) return;
+    const timer = window.setTimeout(() => {
+      void fetch('/api/local-store', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [resumes, activeDoc.id, notify, portableDataFilePath]);
 
   // Validate and persist browser BYOK AI config to localStorage, enabling zero-restart dynamic model switching
   const customAiConfigRef = useRef<CustomAiConfig>(customAiConfig);
@@ -1070,6 +1098,7 @@ export default function App() {
         providers={providers}
         customConfig={customAiConfig}
         resumeCount={resumes.length}
+        portableDataFilePath={portableDataFilePath}
         onClose={() => setSettingsOpen(false)}
         onSaveCustomConfig={handleSaveCustomAiConfig}
         onClearCustomConfig={handleClearCustomAiConfig}

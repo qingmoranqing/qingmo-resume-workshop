@@ -39,6 +39,7 @@ interface SettingsModalProps {
   providers: AiProviderInfo[];
   customConfig: CustomAiConfig;
   resumeCount: number;
+  portableDataFilePath?: string | null;
   onClose: () => void;
   onSaveCustomConfig: (draft: CustomAiConfig) => AiConfigSaveResult;
   onClearCustomConfig: () => void;
@@ -119,6 +120,7 @@ export function SettingsModal({
   providers,
   customConfig,
   resumeCount,
+  portableDataFilePath,
   onClose,
   onSaveCustomConfig,
   onClearCustomConfig,
@@ -830,6 +832,19 @@ export function SettingsModal({
                       </div>
                     </div>
                   </div>
+                  {portableDataFilePath && (
+                    <div
+                      data-testid="portable-disk-sync-badge"
+                      className="rounded-lg border border-emerald-200 bg-emerald-50/75 px-3 py-2 text-[11px] leading-relaxed text-emerald-900"
+                    >
+                      <div className="font-semibold text-emerald-800">
+                        便携版自动落盘已启用（换端口 / 清缓存不丢数据）
+                      </div>
+                      <div className="mt-0.5 font-mono text-[10.5px] break-all text-emerald-800/90">
+                        {portableDataFilePath}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">

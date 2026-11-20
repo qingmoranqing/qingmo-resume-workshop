@@ -45,6 +45,7 @@ import {
   normalizeJdSemanticMatchReport,
   normalizeMeta,
   normalizeStarSuggestions,
+  normalizeStoredResumePayload,
   parseExternalAuditJson,
   parseExternalExpandExperienceJson,
   parseExternalJdExtractJson,
@@ -56,6 +57,7 @@ import {
   resolveBaseFontWeight,
   resolveLineHeight,
   resolvePalette,
+  resolvePortableSyncDecision,
   richSegs,
   runLocalAudit,
   runPdfExportPreflight,
@@ -1206,6 +1208,49 @@ test('LLM JD semantic relevance scoring helpers build prompt, normalize/parse JS
     () => scoreJdSemanticRelevanceWithLlm({ doc, jdText, skills, fetcher: errorFetcher }),
     /API Key 无效/,
   );
+});
+
+test('normalizeStoredResumePayload and resolvePortableSyncDecision validate portable disk hydration safely', () => {
+  // 1. Reject null, primitives, empty arrays, and malformed payloads
+  assert.equal(normalizeStoredResumePayload(null), null);
+  assert.equal(normalizeStoredResumePayload('corrupted'), null);
+  assert.equal(normalizeStoredResumePayload({ resumes: [] }), null);
+  assert.equal(normalizeStoredResumePayload({ resumes: [null, 'bad'] }), null);
+
+  // 2. Normalize valid stored payload and fall back activeId to first doc if stale
+  const sample = cloneResumeDoc(DEFAULT_RESUMES[0]);
+  const normalized = normalizeStoredResumePayload({
+    resumes: [sample],
+    activeId: 'deleted-doc-id',
+  });
+  assert.ok(normalized);
+  assert.equal(normalized!.resumes.length, 1);
+  assert.equal(normalized!.activeId, sample.id);
+  assert.equal(normalized!.resumes[0].data.basic.name, sample.data.basic.name);
+
+  // 3. Respect explicit valid activeId
+  const second = cloneResumeDoc(DEFAULT_RESUMES[1]);
+  const multi = normalizeStoredResumePayload({
+    resumes: [sample, second],
+    activeId: second.id,
+  });
+  assert.equal(multi?.activeId, second.id);
+
+  // 4. Sync decision prefers disk payload when present, seeds disk from local when disk is empty
+  assert.ok(multi);
+  const hydrateDecision = resolvePortableSyncDecision({
+    localPayload: normalized!,
+    diskPayload: multi!,
+  });
+  assert.equal(hydrateDecision.action, 'hydrate-from-disk');
+  assert.equal(hydrateDecision.payload.activeId, second.id);
+
+  const seedDecision = resolvePortableSyncDecision({
+    localPayload: normalized!,
+    diskPayload: null,
+  });
+  assert.equal(seedDecision.action, 'seed-disk-from-local');
+  assert.equal(seedDecision.payload.activeId, sample.id);
 });
 
 

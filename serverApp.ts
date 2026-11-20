@@ -1,4 +1,11 @@
 import express, { type Request, type Response } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+
+export interface CreateApiAppOptions {
+  /** Opt-in local JSON file path used exclusively by the single-user portable `.exe` executable */
+  localDataFilePath?: string;
+}
 
 type ProviderId = 'openai' | 'anthropic';
 
@@ -508,20 +515,96 @@ async function invokeStructuredAi<T>(
   };
 }
 
-export function createApiApp(): express.Express {
+export function createApiApp(options: CreateApiAppOptions = {}): express.Express {
   const app = express();
-  app.use(express.json({ limit: '2mb' }));
+  const localDataFilePath = options.localDataFilePath?.trim() || null;
+
+  app.use(express.json({ limit: '10mb' }));
 
   app.get('/api/health', (_req: Request, res: Response) => {
     const providers = listProviders();
     const readyProviders = providers.filter((p) => p.configured);
     res.json({
       ok: true,
-      mode: 'open-source-self-hosted',
+      app: 'resume-craft',
+      mode: localDataFilePath ? 'portable-standalone' : 'open-source-self-hosted',
+      portable: Boolean(localDataFilePath),
+      dataFile: localDataFilePath ? path.basename(localDataFilePath) : null,
       aiReady: readyProviders.length > 0,
       model: readyProviders[0]?.defaultModel || null,
       providers,
     });
+  });
+
+  /**
+   * Portable single-user local JSON persistence (only active when `localDataFilePath` is passed by exe-entry.ts).
+   * Prevents data loss across port changes (e.g. 3000 -> 3001) or browser cache clearing.
+   */
+  app.get('/api/local-store', (_req: Request, res: Response) => {
+    if (!localDataFilePath) {
+      res.json({ enabled: false, filePath: null, data: null });
+      return;
+    }
+    try {
+      if (!fs.existsSync(localDataFilePath)) {
+        res.json({ enabled: true, filePath: localDataFilePath, data: null });
+        return;
+      }
+      const raw = fs.readFileSync(localDataFilePath, 'utf8');
+      const parsed = JSON.parse(raw);
+      res.json({ enabled: true, filePath: localDataFilePath, data: parsed });
+    } catch (err: unknown) {
+      res.status(500).json({
+        enabled: true,
+        filePath: localDataFilePath,
+        data: null,
+        error: err instanceof Error ? `读取本地简历文件失败：${err.message}` : '读取本地简历文件失败',
+      });
+    }
+  });
+
+  app.put('/api/local-store', (req: Request, res: Response) => {
+    if (!localDataFilePath) {
+      res.status(404).json({ enabled: false, error: '当前运行模式未启用本地文件同步。' });
+      return;
+    }
+    const body = req.body as { activeId?: unknown; resumes?: unknown } | null;
+    if (!body || typeof body !== 'object' || !Array.isArray(body.resumes) || body.resumes.length === 0) {
+      res.status(400).json({ error: '无效的简历数据包：resumes 必须为非空数组。' });
+      return;
+    }
+    try {
+      const dir = path.dirname(localDataFilePath);
+      fs.mkdirSync(dir, { recursive: true });
+      const payload = JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          activeId: typeof body.activeId === 'string' ? body.activeId : '',
+          resumes: body.resumes,
+        },
+        null,
+        2,
+      );
+      const tmpFile = `${localDataFilePath}.tmp`;
+      fs.writeFileSync(tmpFile, payload, 'utf8');
+      try {
+        fs.renameSync(tmpFile, localDataFilePath);
+      } catch {
+        // Fallback for Windows antivirus/file-lock contention during rename
+        fs.writeFileSync(localDataFilePath, payload, 'utf8');
+        try {
+          if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+        } catch {
+          // ignore cleanup failure
+        }
+      }
+      res.json({ ok: true, filePath: localDataFilePath, savedAt: new Date().toISOString() });
+    } catch (err: unknown) {
+      res.status(500).json({
+        error: err instanceof Error ? `写入本地简历文件失败：${err.message}` : '写入本地简历文件失败',
+      });
+    }
   });
 
   app.get('/api/ai/providers', (_req: Request, res: Response) => {

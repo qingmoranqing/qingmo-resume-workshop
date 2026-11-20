@@ -9,6 +9,7 @@ const ROOT = path.resolve(__dirname, '..');
 const DIST_DIR = path.join(ROOT, 'dist');
 const RELEASE_DIR = path.join(ROOT, 'release');
 const EMBEDDED_FILE = path.join(ROOT, 'scripts', 'embeddedAssets.ts');
+const APP_ICON_PATH = path.join(ROOT, 'scripts', 'assets', 'app-icon.ico');
 
 const STUB_CONTENT = `// Stub populated temporarily during \`bun run build:exe\` with base64-encoded \`dist/\` assets.
 export interface EmbeddedAsset {
@@ -185,10 +186,12 @@ function main() {
     ];
 
     if (cfg.isWindows && process.platform === 'win32') {
+      const iconFlags = fs.existsSync(APP_ICON_PATH) ? [`--windows-icon=${APP_ICON_PATH}`] : [];
       const withMetaArgs = [
         'build',
         '--compile',
         '--minify',
+        ...iconFlags,
         '--windows-title=ResumeCraft',
         '--windows-description=Resume Craft Portable Edition',
         `--target=${cfg.bunTarget}`,
@@ -198,7 +201,7 @@ function main() {
       const metaRes = runCommand(bunBin, withMetaArgs, ROOT);
       if (metaRes.error || metaRes.status !== 0) {
         console.warn(
-          '[build-exe] Windows PE metadata flags failed; retrying standalone compile without metadata flags...',
+          '[build-exe] Windows PE metadata/icon flags failed; retrying standalone compile without metadata flags...',
         );
         runOrThrow(bunBin, baseCompileArgs, ROOT);
       }

@@ -41,11 +41,20 @@ jobs:
         shell: bash
         run: bun run build:exe
 
-      - name: Upload .exe build artifact
+      - name: Generate SHA256 checksum
+        shell: bash
+        run: |
+          cd release
+          sha256sum ResumeCraft-win-x64.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload .exe & SHA256 build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ResumeCraft-win-x64
-          path: release/ResumeCraft-win-x64.exe
+          path: |
+            release/ResumeCraft-win-x64.exe
+            release/SHA256SUMS.txt
           if-no-files-found: error
 
       - name: Publish to GitHub Release (on v* tag)
@@ -53,4 +62,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: release/ResumeCraft-win-x64.exe
+          body: |
+            ### 便携版使用说明（Windows x64 免安装单文件）
+            - **双击即用 & 防重复启动**：双击 `ResumeCraft-win-x64.exe` 自动启动本地服务并打开浏览器；若程序已在运行，再次双击将直接唤起已有页面，不会重复占满端口。
+            - **本地文件自动持久化**：所有编辑内容会自动同步到 `.exe` 同级目录下的 `resumes-data.json`（若所在目录只读则回退至用户目录 `~/.resume-craft/resumes-data.json`），清浏览器缓存或换端口也不会丢失简历；拷贝文件夹即可随身迁移。
+            - **Windows SmartScreen 提示**：由于开源个人项目未购买商业 EV 代码签名证书，首次运行若弹出「Windows 已保护你的电脑」，点击 **「更多信息」→「仍要运行」** 即可。
+            - **文件完整性校验**：下载后可使用同页附带的 `SHA256SUMS.txt` 校验 `.exe` 哈希（PowerShell 执行 `Get-FileHash .\ResumeCraft-win-x64.exe -Algorithm SHA256`）。
+          files: |
+            release/ResumeCraft-win-x64.exe
+            release/SHA256SUMS.txt

@@ -116,7 +116,7 @@ npm start
 
 ### 5. 打包免安装单文件一体包（Windows `.exe`）
 
-支持将前后端全部资源内嵌编译为**单个独立可执行文件**（无需安装 Node.js、无需额外 `dist/` 目录，双击自动启动本地服务并弹出默认浏览器，端口冲突自动避让）：
+支持将前后端全部资源与品牌图标内嵌编译为**单个独立可执行文件**（无需安装 Node.js、无需额外 `dist/` 目录，双击自动启动本地服务并弹出默认浏览器，端口冲突自动避让）：
 
 ```bash
 # 本地打包 Windows x64 单文件 .exe（需安装 Bun）
@@ -124,10 +124,13 @@ bun run build:exe
 # 生成产物：release/ResumeCraft-win-x64.exe
 ```
 
-- **直接使用**：双击 `ResumeCraft-win-x64.exe` 即可打开编辑；如需预设服务端 AI 接口，可在 `.exe` 同级目录放一份 `.env` 文件，或直接在右上角「设置」中填写。
-- **GitHub 自动发版（推荐）**：仓库已内置 `.github/workflows/build-exe.yml`：
-  - 在 GitHub 仓库的 **Actions → Build Standalone Executable (.exe) → Run workflow** 点击运行，约 1 分钟即可直接下载构建好的 `.exe`；
-  - 或本地推送版本号标签（如 `git tag v1.0.0 && git push origin v1.0.0`），GitHub 将自动打包并发布到 **Releases** 供用户一键下载。
+- **本地文件自动持久化（不怕清缓存/换端口）**：便携版启动后会自动在 `.exe` 同级目录创建并同步 `resumes-data.json`（若所在目录只读，则自动回退到用户目录 `~/.resume-craft/resumes-data.json`）；可在右上角「设置 → 本地数据与隐私」查看当前同步路径。将 `.exe` 与 `resumes-data.json` 一并拷贝到 U 盘或新电脑即可无损迁移。
+- **防重复启动（单实例守卫）**：如果服务已在后台运行，再次双击 `.exe` 会自动检测到已有实例并直接打开对应网页，不会重复启动多个后台进程。
+- **配置 AI 接口**：可在 `.exe` 同级目录放一份 `.env` 文件，或直接在右上角「设置」中填写自有接口与 Key。
+- **GitHub 自动发版与 SHA256 校验（推荐）**：仓库已内置 `.github/workflows/build-exe.yml`：
+  - 在 GitHub 仓库的 **Actions → Build Standalone Executable (.exe) → Run workflow** 点击运行，约 1 分钟即可同时下载 `ResumeCraft-win-x64.exe` 与 `SHA256SUMS.txt`；
+  - 或本地推送版本号标签（如 `git tag v1.0.0 && git push origin v1.0.0`），GitHub 将自动打包并发布到 **Releases**；
+  - **Windows SmartScreen 说明**：开源项目未购买商业代码签名证书，首次双击若出现系统安全提示，点击 **「更多信息 → 仍要运行」** 即可（也可先对照 `SHA256SUMS.txt` 校验文件哈希）。
 
 ### 6. 类型检查与单元测试
 

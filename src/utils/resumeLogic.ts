@@ -4136,3 +4136,63 @@ export function parseExternalExpandExperienceJson(raw: string): ExperienceStarSu
   return normalized;
 }
 
+export interface StoredResumePayload {
+  activeId: string;
+  resumes: ResumeDoc[];
+}
+
+/**
+ * Validate and normalize a persisted resume store payload (from browser localStorage or portable resumes-data.json).
+ */
+export function normalizeStoredResumePayload(
+  raw: unknown,
+  normalizeBilingualFn?: (b: unknown) => ResumeDoc['bilingual'],
+): StoredResumePayload | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const parsed = raw as Partial<StoredResumePayload>;
+  if (!Array.isArray(parsed.resumes) || parsed.resumes.length === 0) return null;
+
+  const validEntries = parsed.resumes.filter(
+    (item): item is ResumeDoc => Boolean(item) && typeof item === 'object' && !Array.isArray(item),
+  );
+  if (validEntries.length === 0) return null;
+
+  const normalized: ResumeDoc[] = validEntries.map((r) => {
+    const lineage = normalizeLineage(r?.lineage);
+    const bilingual = normalizeBilingualFn ? normalizeBilingualFn(r?.bilingual) : r?.bilingual;
+    return {
+      id: r?.id || nid('resume'),
+      name: r?.name || '未命名版本',
+      meta: normalizeMeta(r?.meta),
+      data: normalizeData(r?.data),
+      ...(lineage ? { lineage } : {}),
+      ...(bilingual ? { bilingual } : {}),
+    };
+  });
+
+  const activeExists = normalized.some((r) => r.id === parsed.activeId);
+  return {
+    activeId: activeExists && parsed.activeId ? parsed.activeId : normalized[0].id,
+    resumes: normalized,
+  };
+}
+
+export type PortableSyncAction =
+  | { action: 'hydrate-from-disk'; payload: StoredResumePayload }
+  | { action: 'seed-disk-from-local'; payload: StoredResumePayload };
+
+/**
+ * Decide how portable `.exe` mode reconciles disk storage (`resumes-data.json`) with browser `localStorage` on startup.
+ * Disk storage is the source of truth whenever valid resumes exist on disk (protecting against port changes or cleared browser cache).
+ */
+export function resolvePortableSyncDecision(params: {
+  localPayload: StoredResumePayload;
+  diskPayload: StoredResumePayload | null;
+}): PortableSyncAction {
+  if (params.diskPayload && params.diskPayload.resumes.length > 0) {
+    return { action: 'hydrate-from-disk', payload: params.diskPayload };
+  }
+  return { action: 'seed-disk-from-local', payload: params.localPayload };
+}
+
+
